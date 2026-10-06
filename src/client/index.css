@@ -1,0 +1,66 @@
+@import 'tailwindcss';
+
+:root {
+  --canvas: #f5f4f0;
+  --surface: #ffffff;
+  --raised: #faf9f7;
+  --ink: #18181b;
+  --muted: #71717a;
+  --line: rgb(24 24 27 / 0.08);
+  --sun: #e11d48;
+  --sat: #2563eb;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #0b0b0f;
+    --surface: #141419;
+    --raised: #1b1b21;
+    --ink: #f4f4f5;
+    --muted: #a1a1aa;
+    --line: rgb(255 255 255 / 0.08);
+    --sun: #fb7185;
+    --sat: #60a5fa;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --font-sans: 'Outfit', 'Zen Kaku Gothic New', ui-sans-serif, system-ui, sans-serif;
+
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-sun: var(--sun);
+  --color-sat: var(--sat);
+}
+
+/* 種別カラー */
+@theme {
+  --color-live: oklch(0.645 0.215 16);
+  --color-video: oklch(0.585 0.2 277);
+  --color-short: oklch(0.72 0.17 55);
+}
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'palt';
+}
+
+/* 背景のやわらかいグラデーション */
+.app-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(60rem 40rem at 10% -10%, color-mix(in oklch, var(--color-video) 14%, transparent), transparent 70%),
+    radial-gradient(50rem 36rem at 100% 0%, color-mix(in oklch, var(--color-live) 12%, transparent), transparent 70%),
+    radial-gradient(40rem 30rem at 50% 110%, color-mix(in oklch, var(--color-short) 10%, transparent), transparent 70%);
+}
