@@ -66,7 +66,7 @@ npm run deploy
 ### 4. GitHub 連携(自動デプロイ)
 
 1. このリポジトリを GitHub に push
-2. Cloudflare ダッシュボード → Workers & Pages → `youtube-calendar` → Settings → Builds → **Connect** で GitHub リポジトリを接続
+2. Cloudflare ダッシュボード → Workers & Pages → `prnb-youtube-calendar` → Settings → Builds → **Connect** で GitHub リポジトリを接続
 3. Build command: `npm run build` / Deploy command: `npx wrangler deploy`
 
 以降は `main` への push で本番デプロイ、PR ごとにプレビュー URL が発行されます。
