@@ -56,7 +56,7 @@ curl -X POST -H "Authorization: Bearer <ADMIN_TOKEN>" http://localhost:5173/api/
 
 ```bash
 npx wrangler login
-npx wrangler d1 create youtube-calendar   # 出力された database_id を wrangler.jsonc に記入
+npx wrangler d1 create prnb-youtube-calendar   # 出力された database_id を wrangler.jsonc に記入
 npm run db:migrate:remote
 npx wrangler secret put YOUTUBE_API_KEY
 npx wrangler secret put ADMIN_TOKEN
@@ -77,7 +77,7 @@ npm run deploy
 ID を 1 行追加するだけで、次の Cron から過去分の取り込みが始まります(タイトルとアイコンは自動取得)。
 
 ```bash
-npx wrangler d1 execute youtube-calendar --remote \
+npx wrangler d1 execute prnb-youtube-calendar --remote \
   --command "INSERT INTO channels (id, color, sort_order) VALUES ('UCxxxxxxxxxxxxxxxxxxxxxx', '#f472b6', 1)"
 ```
 

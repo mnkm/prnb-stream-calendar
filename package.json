@@ -10,8 +10,8 @@
     "deploy": "npm run build && wrangler deploy",
     "typecheck": "tsc -b",
     "cf-typegen": "wrangler types",
-    "db:migrate:local": "wrangler d1 migrations apply youtube-calendar --local",
-    "db:migrate:remote": "wrangler d1 migrations apply youtube-calendar --remote"
+    "db:migrate:local": "wrangler d1 migrations apply prnb-youtube-calendar --local",
+    "db:migrate:remote": "wrangler d1 migrations apply prnb-youtube-calendar --remote"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.104.1",
