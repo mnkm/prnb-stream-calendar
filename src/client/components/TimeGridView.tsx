@@ -7,12 +7,15 @@ import type { CalendarEvent, Channel } from '../../shared/types';
 import { formatTime } from '../lib/format';
 import { TYPE_META } from '../lib/meta';
 import { LiveDot } from './Badges';
+import { Thumbnail } from './Thumbnail';
 
 const HOUR_PX = 52;
 const MINUTE_MS = 60_000;
 const DAY_MIN = 24 * 60;
 /** 動画・ショートは数分しかないので、ブロックが読める最小の長さ */
 const MIN_BLOCK_MIN = 25;
+/** 日表示はサムネイルを入れるので、最小の長さを大きくする */
+const DAY_VIEW_MIN_BLOCK_MIN = 60;
 /** 終了時刻が分からない配信予定の仮の長さ */
 const UPCOMING_LIVE_MIN = 60;
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
@@ -42,7 +45,12 @@ const weekdayTone = (weekday: number) => (weekday === 0 ? 'text-sun' : weekday =
 export function TimeGridView({ days, events, channelMap, showChannelColor, onSelectEvent, onSelectDay }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const now = useNow();
-  const columns = useMemo(() => days.map((day) => layoutDay(day, events, now)), [days, events, now]);
+  const isDayView = days.length === 1;
+  const minBlock = isDayView ? DAY_VIEW_MIN_BLOCK_MIN : MIN_BLOCK_MIN;
+  const columns = useMemo(
+    () => days.map((day) => layoutDay(day, events, now, minBlock)),
+    [days, events, now, minBlock],
+  );
   const showsToday = days.some((d) => isToday(d));
   const firstTop = Math.min(...columns.flatMap((c) => c.map((p) => p.top)));
   // 利用者が自分でスクロールしたら、それ以降は自動で動かさない
@@ -134,7 +142,7 @@ export function TimeGridView({ days, events, channelMap, showChannelColor, onSel
                   <EventBlock
                     key={placed.event.id}
                     placed={placed}
-                    compact={days.length > 1}
+                    dayView={isDayView}
                     channelColor={showChannelColor ? channelMap.get(placed.event.channelId)?.color : undefined}
                     onClick={() => onSelectEvent(placed.event)}
                   />
@@ -160,13 +168,13 @@ export function TimeGridView({ days, events, channelMap, showChannelColor, onSel
 
 function EventBlock({
   placed,
-  compact,
+  dayView,
   channelColor,
   onClick,
 }: {
   placed: Placed;
-  /** 週表示。スマホでは列が狭いので時刻を省き、タイトルを優先する */
-  compact: boolean;
+  /** 日表示ではサムネイルを付ける。週表示のスマホでは列が狭いので時刻を省き、タイトルを優先する */
+  dayView: boolean;
   channelColor?: string;
   onClick: () => void;
 }) {
@@ -188,48 +196,53 @@ function EventBlock({
       <div
         style={channelColor ? { boxShadow: `inset 3px 0 0 ${channelColor}` } : undefined}
         className={clsx(
-          'flex size-full flex-col gap-0.5 rounded-lg px-1.5 py-1',
+          'flex size-full gap-2 rounded-lg px-1.5 py-1',
           meta.chip,
           event.liveStatus === 'upcoming' && 'border border-dashed border-live/50',
           event.liveStatus === 'live' && 'ring-1 ring-live ring-inset',
         )}
       >
-        <div className="flex min-w-0 items-center gap-1">
-          {event.liveStatus === 'live' ? <LiveDot /> : <Icon className="size-3 shrink-0" aria-hidden />}
-          <span className={clsx('shrink-0 tabular-nums opacity-75', compact && 'hidden sm:inline')}>
-            {formatTime(event.eventAt)}
-          </span>
-          {event.membersOnly && <Crown className="size-3 shrink-0 text-member" aria-label="メンバー限定" />}
+        {dayView && <Thumbnail event={event} className="aspect-video h-full max-h-28 max-w-[40%] shrink-0 rounded-md" />}
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="flex min-w-0 items-center gap-1">
+            {event.liveStatus === 'live' ? <LiveDot /> : <Icon className="size-3 shrink-0" aria-hidden />}
+            <span className={clsx('shrink-0 tabular-nums opacity-75', !dayView && 'hidden sm:inline')}>
+              {formatTime(event.eventAt)}
+            </span>
+            {event.membersOnly && <Crown className="size-3 shrink-0 text-member" aria-label="メンバー限定" />}
+          </div>
+          <p className={clsx('font-medium break-all text-ink/85', dayView ? 'line-clamp-2 text-xs' : 'line-clamp-3')}>
+            {event.title}
+          </p>
         </div>
-        <p className="line-clamp-3 font-medium break-all text-ink/85">{event.title}</p>
       </div>
     </button>
   );
 }
 
 /** 予定の開始・終了。配信は実際の長さ、動画は動画の長さを使い、短すぎるものは最小の長さにそろえる */
-function eventSpan(event: CalendarEvent, now: Date): { start: number; end: number } {
+function eventSpan(event: CalendarEvent, now: Date, minBlock: number): { start: number; end: number } {
   const start = new Date(event.eventAt).getTime();
   let end: number;
   if (event.endedAt) end = new Date(event.endedAt).getTime();
   else if (event.liveStatus === 'live') end = Math.max(now.getTime(), start);
   else if (event.liveStatus === 'upcoming') end = start + UPCOMING_LIVE_MIN * MINUTE_MS;
   else end = start + (event.durationSec ?? 0) * 1000;
-  return { start, end: Math.max(end, start + MIN_BLOCK_MIN * MINUTE_MS) };
+  return { start, end: Math.max(end, start + minBlock * MINUTE_MS) };
 }
 
 /** 1 日分の予定を配置する。日付をまたぐ配信は両方の日に表示し、重なる予定は横に並べる */
-function layoutDay(day: Date, events: CalendarEvent[], now: Date): Placed[] {
+function layoutDay(day: Date, events: CalendarEvent[], now: Date, minBlock: number): Placed[] {
   const dayStart = day.getTime();
   const dayEnd = addDays(day, 1).getTime();
 
   const items = events
-    .map((event) => ({ event, ...eventSpan(event, now) }))
+    .map((event) => ({ event, ...eventSpan(event, now, minBlock) }))
     .filter(({ start, end }) => start < dayEnd && end > dayStart)
     .map(({ event, start, end }) => {
       const from = (Math.max(start, dayStart) - dayStart) / MINUTE_MS;
       const to = (Math.min(end, dayEnd) - dayStart) / MINUTE_MS;
-      const height = Math.max(to - from, MIN_BLOCK_MIN);
+      const height = Math.max(to - from, minBlock);
       return { event, top: Math.min(from, DAY_MIN - height), height };
     })
     .sort((a, b) => a.top - b.top || b.height - a.height);
