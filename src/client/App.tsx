@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addMonths, format, startOfDay, startOfMonth } from 'date-fns';
 import { type PanInfo, motion, useDragControls } from 'motion/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -73,14 +73,22 @@ export default function App() {
   const [hiddenChannels, setHiddenChannels] = useState<ReadonlySet<string>>(() => new Set());
   const [dialog, setDialog] = useState<DialogState | null>(null);
 
+  const { data: channels = [] } = useQuery(channelsQuery);
+
   // キーワード検索。検索欄が開いていて語が入っているあいだは、カレンダーの代わりに検索結果を表示する
   const [searchOpen, setSearchOpen] = useState(() => initialQuery() !== '');
   const [searchInput, setSearchInput] = useState(initialQuery);
   const searchTerm = useDebounced(searchInput.trim(), SEARCH_DEBOUNCE_MS);
   const searching = searchOpen && searchTerm !== '';
-  const searchResult = useQuery({
-    ...searchQuery(searchTerm),
-    enabled: searching,
+  // 種別・チャンネルの絞り込みはサーバー側で行い、絞り込んだ結果を全件たどれるようにする
+  const searchTypes = useMemo(() => VIDEO_TYPES.filter((t) => types.has(t)), [types]);
+  const searchChannels = useMemo(
+    () => (hiddenChannels.size > 0 ? channels.filter((c) => !hiddenChannels.has(c.id)).map((c) => c.id) : []),
+    [channels, hiddenChannels],
+  );
+  const searchResult = useInfiniteQuery({
+    ...searchQuery(searchTerm, searchTypes, searchChannels),
+    enabled: searching && searchTypes.length > 0,
     placeholderData: keepPreviousData,
   });
   const closeSearch = () => {
@@ -89,7 +97,6 @@ export default function App() {
   };
 
   const grid = useMemo(() => monthGrid(month), [month]);
-  const { data: channels = [] } = useQuery(channelsQuery);
   const eventsResult = useQuery({
     ...eventsQuery(grid.start, grid.end),
     placeholderData: keepPreviousData,
@@ -134,8 +141,8 @@ export default function App() {
   const visible = useMemo(() => channelVisible.filter((e) => types.has(e.type)), [channelVisible, types]);
   const byDay = useMemo(() => groupByDay(visible), [visible]);
   const searchEvents = useMemo(
-    () => (searchResult.data?.events ?? []).filter((e) => !hiddenChannels.has(e.channelId)),
-    [searchResult.data, hiddenChannels],
+    () => (searchTypes.length > 0 ? (searchResult.data?.pages.flatMap((p) => p.events) ?? []) : []),
+    [searchResult.data, searchTypes],
   );
 
   const shift = (delta: number) => {
@@ -194,9 +201,12 @@ export default function App() {
             query={searchTerm}
             terms={splitSearchTerms(searchTerm)}
             events={searchEvents}
-            hasMore={searchResult.data?.hasMore ?? false}
-            isLoading={searchResult.isPending || searchResult.isPlaceholderData}
+            counts={searchResult.data?.pages[0]?.counts}
+            isLoading={searchTypes.length > 0 && (searchResult.isPending || searchResult.isPlaceholderData)}
             isError={searchResult.isError}
+            hasNextPage={searchResult.hasNextPage}
+            isFetchingNextPage={searchResult.isFetchingNextPage}
+            onLoadMore={() => void searchResult.fetchNextPage()}
             types={types}
             onToggleType={(t) => setTypes((s) => toggle(s, t))}
             channelMap={channelMap}

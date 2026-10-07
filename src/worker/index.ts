@@ -12,7 +12,7 @@ type Bindings = Env & {
 
 const MAX_RANGE_MS = 100 * 24 * 60 * 60 * 1000;
 const MAX_CHANNEL_FILTER = 20;
-const SEARCH_LIMIT = 200;
+const SEARCH_PAGE_SIZE = 50;
 const MAX_SEARCH_TERMS = 5;
 const MAX_SEARCH_TERM_LENGTH = 50;
 
@@ -46,7 +46,7 @@ app.get('/events', async (c) => {
 
 /**
  * キーワード検索。スペース(全角も可)で区切った語をすべて含むタイトルを、期間に関係なく新しい順に返す。
- * 全角・半角、英字の大文字・小文字は区別しない
+ * 全角・半角、英字の大文字・小文字は区別しない。50 件ずつ返し、続きは cursor に nextCursor を渡して取る
  */
 app.get('/search', async (c) => {
   const terms = splitSearchTerms(c.req.query('q') ?? '')
@@ -57,7 +57,9 @@ app.get('/search', async (c) => {
   const result = await searchEvents(c.env.DB, {
     terms,
     channelIds: parseList(c.req.query('channels')).slice(0, MAX_CHANNEL_FILTER),
-    limit: SEARCH_LIMIT,
+    types: parseList(c.req.query('types')).filter(isVideoType),
+    cursor: c.req.query('cursor') || null,
+    limit: SEARCH_PAGE_SIZE,
   });
   c.header('Cache-Control', 'public, max-age=60');
   return c.json(result);
