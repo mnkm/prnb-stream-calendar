@@ -1,4 +1,5 @@
-import type { CalendarEvent, Channel, LiveStatus, VideoType } from '../shared/types';
+import { normalizeForSearch } from '../shared/search';
+import type { CalendarEvent, Channel, LiveStatus, SearchResult, VideoType } from '../shared/types';
 
 export type BackfillStage = 'uploads' | 'shorts' | 'done';
 
@@ -139,9 +140,9 @@ export async function findActiveLiveIds(db: D1Database, channelId: string): Prom
 export async function upsertVideos(db: D1Database, rows: VideoRow[], now: string) {
   if (rows.length === 0) return;
   const stmt = db.prepare(
-    `INSERT INTO videos (id, channel_id, type, live_status, title, thumbnail_url, duration_sec,
+    `INSERT INTO videos (id, channel_id, type, live_status, title, search_title, thumbnail_url, duration_sec,
                          event_at, ended_at, published_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (id) DO UPDATE SET
        -- UUSH で判定済みのショートは、通常の再取得で 'video' に戻さない。
        -- プレミア公開(type = 'video' かつ live_status あり)も、公開後の再取得で 'live' に戻さない
@@ -152,6 +153,7 @@ export async function upsertVideos(db: D1Database, rows: VideoRow[], now: string
                        END,
        live_status   = excluded.live_status,
        title         = excluded.title,
+       search_title  = excluded.search_title,
        thumbnail_url = excluded.thumbnail_url,
        duration_sec  = excluded.duration_sec,
        event_at      = excluded.event_at,
@@ -162,11 +164,30 @@ export async function upsertVideos(db: D1Database, rows: VideoRow[], now: string
   await db.batch(
     rows.map((r) =>
       stmt.bind(
-        r.id, r.channel_id, r.type, r.live_status, r.title, r.thumbnail_url, r.duration_sec,
-        r.event_at, r.ended_at, r.published_at, now,
+        r.id, r.channel_id, r.type, r.live_status, r.title, normalizeForSearch(r.title), r.thumbnail_url,
+        r.duration_sec, r.event_at, r.ended_at, r.published_at, now,
       ),
     ),
   );
+}
+
+/** search_title が空の行(列を追加する前に登録したもの)を埋める。1 回あたり limit 件まで */
+export async function fillSearchTitles(db: D1Database, limit: number): Promise<number> {
+  const { results } = await db
+    .prepare('SELECT id, title FROM videos WHERE search_title IS NULL LIMIT ?')
+    .bind(limit)
+    .all<{ id: string; title: string }>();
+  if (results.length === 0) return 0;
+  // { id: 正規化したタイトル } を JSON で渡し、1 つの UPDATE 文でまとめて書き込む
+  const values = JSON.stringify(Object.fromEntries(results.map((r) => [r.id, normalizeForSearch(r.title)])));
+  await db
+    .prepare(
+      `UPDATE videos SET search_title = (SELECT value FROM json_each(?1) WHERE key = videos.id)
+        WHERE id IN (SELECT key FROM json_each(?1))`,
+    )
+    .bind(values)
+    .run();
+  return results.length;
 }
 
 export async function markShorts(db: D1Database, ids: string[]) {
@@ -222,4 +243,28 @@ export async function queryEvents(db: D1Database, q: EventQuery): Promise<Calend
     .bind(...params)
     .all<StoredVideoRow>();
   return results.map(toEvent);
+}
+
+export interface SearchQuery {
+  terms: string[];
+  channelIds: string[];
+  limit: number;
+}
+
+/** タイトルに全てのキーワード(splitSearchTerms で正規化済み)を含むものを、新しい順に返す */
+export async function searchEvents(db: D1Database, q: SearchQuery): Promise<SearchResult> {
+  // 入力した % と _ はワイルドカードではなく文字として扱う(エスケープ文字は !)
+  const escapeLike = (s: string) => s.replace(/[!%_]/g, (c) => `!${c}`);
+  // search_title がまだ空の行は、元のタイトルで探す
+  const where = q.terms.map(() => `COALESCE(search_title, title) LIKE '%' || ? || '%' ESCAPE '!'`);
+  const params: (string | number)[] = q.terms.map(escapeLike);
+  if (q.channelIds.length > 0) {
+    where.push(`channel_id IN (${placeholders(q.channelIds.length)})`);
+    params.push(...q.channelIds);
+  }
+  const { results } = await db
+    .prepare(`SELECT * FROM videos WHERE ${where.join(' AND ')} ORDER BY event_at DESC LIMIT ?`)
+    .bind(...params, q.limit + 1)
+    .all<StoredVideoRow>();
+  return { events: results.slice(0, q.limit).map(toEvent), hasMore: results.length > q.limit };
 }

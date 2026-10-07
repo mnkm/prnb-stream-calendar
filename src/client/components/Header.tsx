@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { Calendar1, CalendarDays, CalendarRange, List, Monitor, Moon, Sun } from 'lucide-react';
+import { Calendar1, CalendarDays, CalendarRange, List, Monitor, Moon, Search, Sun, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import type { Channel } from '../../shared/types';
 import type { ViewMode } from '../lib/calendar';
@@ -18,13 +18,23 @@ const THEME_META: Record<ThemePreference, { label: string; icon: typeof Sun }> =
   dark: { label: 'ダーク', icon: Moon },
 };
 
+interface SearchProps {
+  open: boolean;
+  value: string;
+  onChange: (value: string) => void;
+  onOpen: () => void;
+  /** 検索欄を閉じて入力も消す(カレンダーに戻る) */
+  onClose: () => void;
+}
+
 interface Props {
   channels: Channel[];
   view: ViewMode;
   onViewChange: (view: ViewMode) => void;
+  search: SearchProps;
 }
 
-export function Header({ channels, view, onViewChange }: Props) {
+export function Header({ channels, view, onViewChange, search }: Props) {
   const primary = channels[0];
 
   return (
@@ -44,13 +54,25 @@ export function Header({ channels, view, onViewChange }: Props) {
             ),
           )}
         </div>
-        <div className="min-w-0 flex-1">
+        <div className="hidden min-w-0 flex-1 sm:block">
           <p className="truncate text-[11px] font-medium tracking-[0.18em] text-muted uppercase">Stream Calendar</p>
           <p className="truncate text-sm font-semibold">
             {channels.length > 1 ? `${channels.length} チャンネル` : (primary?.title ?? '読み込み中…')}
           </p>
         </div>
 
+        <div className="flex-1 sm:hidden" />
+        <button
+          onClick={search.open ? search.onClose : search.onOpen}
+          aria-label={search.open ? '検索を閉じる' : 'キーワードで検索'}
+          aria-expanded={search.open}
+          className={clsx(
+            'grid size-9 shrink-0 place-items-center rounded-full border border-line transition',
+            search.open ? 'bg-ink text-canvas' : 'bg-surface/80 text-muted hover:text-ink',
+          )}
+        >
+          <Search className="size-4" aria-hidden />
+        </button>
         <ThemeToggle />
 
         <div role="tablist" aria-label="表示切替" className="flex rounded-full border border-line bg-surface/80 p-1">
@@ -78,6 +100,8 @@ export function Header({ channels, view, onViewChange }: Props) {
           ))}
         </div>
       </div>
+
+      {search.open && <SearchBar {...search} />}
     </header>
   );
 }
@@ -96,5 +120,35 @@ function ThemeToggle() {
     >
       <Icon className="size-4" aria-hidden />
     </button>
+  );
+}
+
+function SearchBar({ value, onChange, onClose }: SearchProps) {
+  return (
+    <div className="mx-auto max-w-7xl px-4 pb-3 sm:px-6">
+      <div className="flex h-10 items-center gap-2 rounded-full border border-line bg-surface px-4 focus-within:border-ink/30">
+        <Search className="size-4 shrink-0 text-muted" aria-hidden />
+        <input
+          autoFocus
+          type="search"
+          enterKeyHint="search"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => e.key === 'Escape' && onClose()}
+          placeholder="タイトルで検索(スペースで区切ると絞り込み)"
+          aria-label="タイトルで検索"
+          className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted [&::-webkit-search-cancel-button]:hidden"
+        />
+        {value && (
+          <button
+            onClick={() => onChange('')}
+            aria-label="入力を消す"
+            className="grid size-6 shrink-0 place-items-center rounded-full text-muted transition hover:bg-ink/5 hover:text-ink"
+          >
+            <X className="size-3.5" />
+          </button>
+        )}
+      </div>
+    </div>
   );
 }

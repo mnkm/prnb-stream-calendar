@@ -25,3 +25,9 @@ export interface CalendarEvent {
   /** メンバー限定。メンバー以外は埋め込み再生できない */
   membersOnly: boolean;
 }
+
+export interface SearchResult {
+  events: CalendarEvent[];
+  /** 上限を超えて一致したものがある(新しい順に上限まで返している) */
+  hasMore: boolean;
+}

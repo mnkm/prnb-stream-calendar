@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
+import { splitSearchTerms } from '../shared/search';
 import { VIDEO_TYPES, type VideoType } from '../shared/types';
-import { listEnabledChannels, queryEvents, toChannel } from './db';
+import { listEnabledChannels, queryEvents, searchEvents, toChannel } from './db';
 import { syncAll } from './sync';
 import { toIsoSeconds } from './time';
 
@@ -11,6 +12,9 @@ type Bindings = Env & {
 
 const MAX_RANGE_MS = 100 * 24 * 60 * 60 * 1000;
 const MAX_CHANNEL_FILTER = 20;
+const SEARCH_LIMIT = 200;
+const MAX_SEARCH_TERMS = 5;
+const MAX_SEARCH_TERM_LENGTH = 50;
 
 const app = new Hono<{ Bindings: Bindings }>().basePath('/api');
 
@@ -38,6 +42,25 @@ app.get('/events', async (c) => {
   });
   c.header('Cache-Control', 'public, max-age=60');
   return c.json(events);
+});
+
+/**
+ * キーワード検索。スペース(全角も可)で区切った語をすべて含むタイトルを、期間に関係なく新しい順に返す。
+ * 全角・半角、英字の大文字・小文字は区別しない
+ */
+app.get('/search', async (c) => {
+  const terms = splitSearchTerms(c.req.query('q') ?? '')
+    .slice(0, MAX_SEARCH_TERMS)
+    .map((t) => t.slice(0, MAX_SEARCH_TERM_LENGTH));
+  if (terms.length === 0) return c.json({ error: 'q is required' }, 400);
+
+  const result = await searchEvents(c.env.DB, {
+    terms,
+    channelIds: parseList(c.req.query('channels')).slice(0, MAX_CHANNEL_FILTER),
+    limit: SEARCH_LIMIT,
+  });
+  c.header('Cache-Control', 'public, max-age=60');
+  return c.json(result);
 });
 
 /** 手動同期(初回の取り込みや動作確認用)。Authorization: Bearer <ADMIN_TOKEN> */

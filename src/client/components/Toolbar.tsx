@@ -66,28 +66,7 @@ export function Toolbar(props: Props) {
       </div>
 
       <div className="flex flex-col gap-2 lg:items-end">
-        <div className="flex flex-wrap gap-2">
-          {VIDEO_TYPES.map((type) => {
-            const meta = TYPE_META[type];
-            const on = props.types.has(type);
-            const Icon = meta.icon;
-            return (
-              <button
-                key={type}
-                aria-pressed={on}
-                onClick={() => props.onToggleType(type)}
-                className={clsx(
-                  'flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition',
-                  on ? meta.toggleOn : 'border-line text-muted line-through decoration-1 hover:text-ink',
-                )}
-              >
-                <Icon className="size-3.5" aria-hidden />
-                {meta.label}
-                <span className="tabular-nums opacity-70">{props.counts[type]}</span>
-              </button>
-            );
-          })}
-        </div>
+        <TypeFilters types={props.types} counts={props.counts} onToggle={props.onToggleType} />
 
         {/* 2 チャンネル目を登録すると自動で表示される */}
         {channels.length > 1 && (
@@ -112,6 +91,42 @@ export function Toolbar(props: Props) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** 種別ごとの表示切り替え(件数付き)。検索結果でも使う */
+export function TypeFilters({
+  types,
+  counts,
+  onToggle,
+}: {
+  types: ReadonlySet<VideoType>;
+  counts: Record<VideoType, number>;
+  onToggle: (type: VideoType) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {VIDEO_TYPES.map((type) => {
+        const meta = TYPE_META[type];
+        const on = types.has(type);
+        const Icon = meta.icon;
+        return (
+          <button
+            key={type}
+            aria-pressed={on}
+            onClick={() => onToggle(type)}
+            className={clsx(
+              'flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition',
+              on ? meta.toggleOn : 'border-line text-muted line-through decoration-1 hover:text-ink',
+            )}
+          >
+            <Icon className="size-3.5" aria-hidden />
+            {meta.label}
+            <span className="tabular-nums opacity-70">{counts[type]}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
