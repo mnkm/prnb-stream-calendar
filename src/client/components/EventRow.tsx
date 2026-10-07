@@ -1,7 +1,7 @@
 import clsx from 'clsx';
 import type { CalendarEvent } from '../../shared/types';
 import { formatDuration, formatTime } from '../lib/format';
-import { LiveStatusBadge, TypeBadge } from './Badges';
+import { LiveStatusBadge, MembersOnlyBadge, TypeBadge } from './Badges';
 import { Thumbnail } from './Thumbnail';
 
 /** リスト表示・日別ダイアログで使う 1 行 */
@@ -37,6 +37,7 @@ export function EventRow({
           <span className="text-sm font-semibold tabular-nums">{formatTime(event.eventAt)}</span>
           <TypeBadge event={event} />
           <LiveStatusBadge event={event} />
+          <MembersOnlyBadge event={event} />
           {channelColor && <span className="size-2 rounded-full" style={{ background: channelColor }} />}
         </div>
         <p className="line-clamp-2 text-sm leading-snug font-medium text-ink/90 group-hover:text-ink">{event.title}</p>

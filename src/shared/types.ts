@@ -22,4 +22,6 @@ export interface CalendarEvent {
   eventAt: string;
   endedAt: string | null;
   publishedAt: string;
+  /** メンバー限定。メンバー以外は埋め込み再生できない */
+  membersOnly: boolean;
 }

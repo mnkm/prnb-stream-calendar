@@ -7,9 +7,11 @@ import {
   findExistingVideoIds,
   listEnabledChannels,
   markChannelSynced,
+  markMembersOnly,
   markPremieres,
   markShorts,
   saveBackfillProgress,
+  saveMembersScanProgress,
   savePremieresScanProgress,
   updateChannelProfile,
   upsertVideos,
@@ -21,6 +23,8 @@ import {
   YouTubeClient,
   fetchRssVideoIds,
   isShortByUrl,
+  membersPlaylistId,
+  membersVideosPlaylistId,
   parseDuration,
   shortsPlaylistId,
   uploadsPlaylistId,
@@ -113,8 +117,12 @@ async function incrementalSync(db: D1Database, yt: YouTubeClient, channel: Chann
     latestIds = (await yt.listPlaylistPage(uploadsPlaylistId(channel.id)))?.ids ?? [];
   }
 
-  const known = await findExistingVideoIds(db, latestIds);
-  const newIds = latestIds.filter((id) => !known.has(id));
+  // メンバー限定は RSS にも UU にも出てこないので、UUMO の先頭も見る
+  const membersPage = await yt.listPlaylistPage(membersPlaylistId(channel.id));
+  const candidateIds = [...new Set([...latestIds, ...(membersPage?.ids ?? [])])];
+
+  const known = await findExistingVideoIds(db, candidateIds);
+  const newIds = candidateIds.filter((id) => !known.has(id));
   const activeLiveIds = await findActiveLiveIds(db, channel.id);
   const targetIds = [...new Set([...newIds, ...activeLiveIds])];
 
@@ -137,7 +145,9 @@ async function incrementalSync(db: D1Database, yt: YouTubeClient, channel: Chann
   // UUSH / UULF への反映が遅れて誤った種別で登録されたものを後から補正する
   if (shortsPage) await markShorts(db, shortsPage.ids);
   if (videosPage) await markPremieres(db, videosPage.ids);
+  if (membersPage) await markMembersOnly(db, membersPage.ids);
   if (!channel.premieres_scanned_at) await scanPremieres(db, yt, channel);
+  const membersUpserted = channel.members_scanned_at ? 0 : await scanMembers(db, yt, channel);
 
   // 予定枠が削除・非公開化された場合は videos.list に返ってこないので、カレンダーからも消す
   const returned = new Set(videos.map((v) => v.id));
@@ -145,7 +155,12 @@ async function incrementalSync(db: D1Database, yt: YouTubeClient, channel: Chann
   await deleteVideos(db, removedIds);
 
   await markChannelSynced(db, channel.id, now);
-  return { channelId: channel.id, mode: 'incremental', upserted: videos.length, removed: removedIds.length };
+  return {
+    channelId: channel.id,
+    mode: 'incremental',
+    upserted: videos.length + membersUpserted,
+    removed: removedIds.length,
+  };
 }
 
 /**
@@ -161,6 +176,39 @@ async function scanPremieres(db: D1Database, yt: YouTubeClient, channel: Channel
     if (!pageToken) break;
   }
   await savePremieresScanProgress(db, channel.id, pageToken ?? null, nowIso());
+}
+
+/**
+ * 過去分の取り込み後に 1 回だけ、UUMO を最後まで見てメンバー限定を取り込む。
+ * 最後のページまで進んだら、UUMF でメンバー限定のプレミア公開を動画に分類し直す
+ */
+async function scanMembers(db: D1Database, yt: YouTubeClient, channel: ChannelRow): Promise<number> {
+  let pageToken = channel.members_page_token ?? undefined;
+  let upserted = 0;
+  for (let i = 0; i < BACKFILL_PAGES_PER_RUN; i++) {
+    const page = await yt.listPlaylistPage(membersPlaylistId(channel.id), pageToken);
+    if (page) {
+      const rows = (await yt.getVideos(page.ids)).map((v) => toVideoRow(v, false, false));
+      await upsertVideos(db, rows, nowIso());
+      await markMembersOnly(db, page.ids);
+      upserted += rows.length;
+    }
+    pageToken = page?.nextPageToken;
+    if (!pageToken) break;
+  }
+
+  if (!pageToken) {
+    // UUMF は件数が少ないので、進み具合は保存せず 1 回で読み切る(上限を超えた分は諦める)
+    let premiereToken: string | undefined;
+    for (let i = 0; i < BACKFILL_PAGES_PER_RUN; i++) {
+      const page = await yt.listPlaylistPage(membersVideosPlaylistId(channel.id), premiereToken);
+      if (page) await markPremieres(db, page.ids);
+      premiereToken = page?.nextPageToken;
+      if (!premiereToken) break;
+    }
+  }
+  await saveMembersScanProgress(db, channel.id, pageToken ?? null, nowIso());
+  return upserted;
 }
 
 function toVideoRow(v: YtVideo, isShort: boolean, inVideosTab: boolean): VideoRow {
