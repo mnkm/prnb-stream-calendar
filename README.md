@@ -222,6 +222,18 @@ npm run deploy
 
 マイグレーションは列の追加だけにしておくと、新しいコードのデプロイ前に反映しても、動いている本番に影響しません。
 
+### Cron(同期の間隔)を変えるとき
+
+GitHub 連携の自動デプロイでは、コードは更新されても **Cron の設定は本番に反映されません**。`wrangler.jsonc` の `triggers.crons` を変えて `main` に取り込んだあと、プロジェクトのフォルダで次を実行してください。
+
+```bash
+npm run build                 # Cron の設定を含むデプロイ用の設定ファイルを作り直す
+npx wrangler triggers deploy  # Cron の設定だけを本番に反映する
+```
+
+- 実行すると `schedule: */5 * * * *` のように、反映された設定が表示されます。ダッシュボードの Workers & Pages → `prnb-youtube-calendar` → Settings → Trigger events でも確認できます。
+- 設定を変えてから実際の実行間隔が切り替わるまで、20 分ほどかかることがあります。切り替わるまでは前の間隔のまま実行されます(ダッシュボードの「Cron イベント」の `Cron` 列で、どちらの設定で実行されたかがわかります)。
+
 | マイグレーション | 内容 |
 |---|---|
 | `0001_init.sql` | `channels` / `videos` テーブル |
