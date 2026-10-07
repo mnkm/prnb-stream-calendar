@@ -26,11 +26,15 @@ export function Toolbar(props: Props) {
     <div className="flex flex-col gap-5 py-6 sm:py-8 lg:flex-row lg:items-end lg:justify-between">
       <div className="flex items-end gap-4">
         <div>
-          <p className="text-sm font-medium tracking-widest text-muted tabular-nums">{format(month, 'yyyy')}</p>
-          <h1 className="flex items-baseline gap-2 leading-none font-semibold tracking-tight">
-            <span className="text-6xl tabular-nums sm:text-7xl">{format(month, 'M')}</span>
-            <span className="text-2xl">月</span>
-            <span className="ml-1 text-lg font-normal text-muted">{format(month, 'MMMM')}</span>
+          {/* w-0 で幅の計算から外し、月名の長さでボタンの位置がずれないようにする(文字ははみ出して表示される) */}
+          <p className="w-0 text-sm font-medium tracking-widest whitespace-nowrap text-muted tabular-nums">
+            {format(month, 'yyyy')}
+            <span className="ml-2 font-normal">{format(month, 'MMMM')}</span>
+          </p>
+          {/* 幅を常に「12月」に合わせ、1 桁の月でもボタンの位置を変えない */}
+          <h1 className="grid leading-none font-semibold tracking-tight">
+            <MonthNumber value="12" placeholder />
+            <MonthNumber value={format(month, 'M')} />
           </h1>
         </div>
         <div className="mb-1 flex items-center gap-1">
@@ -104,6 +108,18 @@ export function Toolbar(props: Props) {
         )}
       </div>
     </div>
+  );
+}
+
+function MonthNumber({ value, placeholder = false }: { value: string; placeholder?: boolean }) {
+  return (
+    <span
+      className={clsx('col-start-1 row-start-1 flex items-baseline gap-2', placeholder && 'invisible')}
+      aria-hidden={placeholder || undefined}
+    >
+      <span className="text-6xl tabular-nums sm:text-7xl">{value}</span>
+      <span className="text-2xl">月</span>
+    </span>
   );
 }
 
