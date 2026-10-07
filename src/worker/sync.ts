@@ -7,8 +7,10 @@ import {
   findExistingVideoIds,
   listEnabledChannels,
   markChannelSynced,
+  markPremieres,
   markShorts,
   saveBackfillProgress,
+  savePremieresScanProgress,
   updateChannelProfile,
   upsertVideos,
 } from './db';
@@ -22,6 +24,7 @@ import {
   parseDuration,
   shortsPlaylistId,
   uploadsPlaylistId,
+  videosPlaylistId,
 } from './youtube';
 
 /**
@@ -82,7 +85,7 @@ async function backfillStep(db: D1Database, yt: YouTubeClient, channel: ChannelR
     if (stage === 'uploads') {
       const page = await yt.listPlaylistPage(uploadsPlaylistId(channel.id), pageToken);
       if (page) {
-        const rows = (await yt.getVideos(page.ids)).map((v) => toVideoRow(v, false));
+        const rows = (await yt.getVideos(page.ids)).map((v) => toVideoRow(v, false, false));
         await upsertVideos(db, rows, nowIso());
         upserted += rows.length;
       }
@@ -117,6 +120,8 @@ async function incrementalSync(db: D1Database, yt: YouTubeClient, channel: Chann
 
   const shortsPage = await yt.listPlaylistPage(shortsPlaylistId(channel.id));
   const shortIds = new Set(shortsPage?.ids ?? []);
+  const videosPage = await yt.listPlaylistPage(videosPlaylistId(channel.id));
+  const premiereIds = new Set(videosPage?.ids ?? []);
   const videos = targetIds.length > 0 ? await yt.getVideos(targetIds) : [];
 
   if (!shortsPage) {
@@ -128,9 +133,11 @@ async function incrementalSync(db: D1Database, yt: YouTubeClient, channel: Chann
   }
 
   const now = nowIso();
-  await upsertVideos(db, videos.map((v) => toVideoRow(v, shortIds.has(v.id))), now);
-  // UUSH への反映が遅れて 'video' で登録されたものを後から補正する
+  await upsertVideos(db, videos.map((v) => toVideoRow(v, shortIds.has(v.id), premiereIds.has(v.id))), now);
+  // UUSH / UULF への反映が遅れて誤った種別で登録されたものを後から補正する
   if (shortsPage) await markShorts(db, shortsPage.ids);
+  if (videosPage) await markPremieres(db, videosPage.ids);
+  if (!channel.premieres_scanned_at) await scanPremieres(db, yt, channel);
 
   // 予定枠が削除・非公開化された場合は videos.list に返ってこないので、カレンダーからも消す
   const returned = new Set(videos.map((v) => v.id));
@@ -141,21 +148,40 @@ async function incrementalSync(db: D1Database, yt: YouTubeClient, channel: Chann
   return { channelId: channel.id, mode: 'incremental', upserted: videos.length, removed: removedIds.length };
 }
 
-function toVideoRow(v: YtVideo, isShort: boolean): VideoRow {
+/**
+ * 過去分の取り込み後に 1 回だけ、UULF を最後まで見てプレミア公開を動画に分類し直す。
+ * ページ数が多い場合は次回の Cron に持ち越す
+ */
+async function scanPremieres(db: D1Database, yt: YouTubeClient, channel: ChannelRow) {
+  let pageToken = channel.premieres_page_token ?? undefined;
+  for (let i = 0; i < BACKFILL_PAGES_PER_RUN; i++) {
+    const page = await yt.listPlaylistPage(videosPlaylistId(channel.id), pageToken);
+    if (page) await markPremieres(db, page.ids);
+    pageToken = page?.nextPageToken;
+    if (!pageToken) break;
+  }
+  await savePremieresScanProgress(db, channel.id, pageToken ?? null, nowIso());
+}
+
+function toVideoRow(v: YtVideo, isShort: boolean, inVideosTab: boolean): VideoRow {
   const live = v.liveStreamingDetails;
   const broadcast = v.snippet.liveBroadcastContent;
   const liveStatus: LiveStatus | null = live ? (broadcast === 'none' ? 'ended' : broadcast) : null;
   const eventAt = live?.actualStartTime ?? live?.scheduledStartTime ?? v.snippet.publishedAt;
   const thumbs = v.snippet.thumbnails;
+  const duration = parseDuration(v.contentDetails?.duration);
+  // プレミア公開も liveStreamingDetails を持つ。公開前・公開中は動画がアップロード済みなので長さがあり、
+  // 長さ 0 のライブ配信と区別できる。公開後は UULF に含まれるかどうかで判定する
+  const isPremiere = !!live && (inVideosTab || (broadcast !== 'none' && !!duration));
 
   return {
     id: v.id,
     channel_id: v.snippet.channelId,
-    type: live ? 'live' : isShort ? 'short' : 'video',
+    type: live && !isPremiere ? 'live' : isShort ? 'short' : 'video',
     live_status: liveStatus,
     title: v.snippet.title,
     thumbnail_url: thumbs.medium?.url ?? thumbs.default?.url ?? null,
-    duration_sec: parseDuration(v.contentDetails?.duration),
+    duration_sec: duration,
     event_at: toIsoSeconds(eventAt),
     ended_at: live?.actualEndTime ? toIsoSeconds(live.actualEndTime) : null,
     published_at: toIsoSeconds(v.snippet.publishedAt),

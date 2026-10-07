@@ -12,6 +12,8 @@ export interface ChannelRow {
   backfill_stage: BackfillStage;
   backfill_page_token: string | null;
   backfilled_at: string | null;
+  premieres_page_token: string | null;
+  premieres_scanned_at: string | null;
   synced_at: string | null;
 }
 
@@ -35,16 +37,18 @@ export function toChannel(row: ChannelRow): Channel {
 }
 
 function toEvent(row: VideoRow): CalendarEvent {
+  // プレミア公開は type = 'video' のまま live_status で状態を追跡している。画面には通常の動画として返す
+  const isLive = row.type === 'live';
   return {
     id: row.id,
     channelId: row.channel_id,
     type: row.type,
-    liveStatus: row.live_status,
+    liveStatus: isLive ? row.live_status : null,
     title: row.title,
     thumbnailUrl: row.thumbnail_url,
     durationSec: row.duration_sec,
     eventAt: row.event_at,
-    endedAt: row.ended_at,
+    endedAt: isLive ? row.ended_at : null,
     publishedAt: row.published_at,
   };
 }
@@ -78,6 +82,18 @@ export async function saveBackfillProgress(
     .run();
 }
 
+export async function savePremieresScanProgress(db: D1Database, id: string, pageToken: string | null, now: string) {
+  await db
+    .prepare(
+      `UPDATE channels
+          SET premieres_page_token = ?,
+              premieres_scanned_at = CASE WHEN ? IS NULL THEN ? ELSE premieres_scanned_at END
+        WHERE id = ?`,
+    )
+    .bind(pageToken, pageToken, now, id)
+    .run();
+}
+
 export async function markChannelSynced(db: D1Database, id: string, now: string) {
   await db.prepare('UPDATE channels SET synced_at = ? WHERE id = ?').bind(now, id).run();
 }
@@ -107,8 +123,13 @@ export async function upsertVideos(db: D1Database, rows: VideoRow[], now: string
                          event_at, ended_at, published_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (id) DO UPDATE SET
-       -- UUSH で判定済みのショートは、通常の再取得で 'video' に戻さない
-       type          = CASE WHEN videos.type = 'short' AND excluded.type = 'video' THEN 'short' ELSE excluded.type END,
+       -- UUSH で判定済みのショートは、通常の再取得で 'video' に戻さない。
+       -- プレミア公開(type = 'video' かつ live_status あり)も、公開後の再取得で 'live' に戻さない
+       type          = CASE
+                         WHEN videos.type = 'short' AND excluded.type = 'video' THEN 'short'
+                         WHEN videos.type = 'video' AND videos.live_status IS NOT NULL AND excluded.type = 'live' THEN 'video'
+                         ELSE excluded.type
+                       END,
        live_status   = excluded.live_status,
        title         = excluded.title,
        thumbnail_url = excluded.thumbnail_url,
@@ -132,6 +153,15 @@ export async function markShorts(db: D1Database, ids: string[]) {
   if (ids.length === 0) return;
   await db
     .prepare(`UPDATE videos SET type = 'short' WHERE type = 'video' AND id IN (${placeholders(ids.length)})`)
+    .bind(...ids)
+    .run();
+}
+
+/** UULF に含まれるライブ扱いの動画はプレミア公開なので、動画に分類し直す */
+export async function markPremieres(db: D1Database, ids: string[]) {
+  if (ids.length === 0) return;
+  await db
+    .prepare(`UPDATE videos SET type = 'video' WHERE type = 'live' AND id IN (${placeholders(ids.length)})`)
     .bind(...ids)
     .run();
 }

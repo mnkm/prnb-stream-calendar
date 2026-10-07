@@ -46,9 +46,11 @@ export class YouTubeApiError extends Error {
 }
 
 // チャンネル ID (UCxxxx) から各種システムプレイリスト ID を導出する。
-// UU = 全アップロード(公式)。UUSH = ショートのみ(非公式だが広く使われている)。
+// UU = 全アップロード(公式)。UUSH = ショートのみ、UULF = 「動画」タブ(プレミア公開を含み、ライブは含まない)。
+// UUSH / UULF は非公式だが広く使われている。
 export const uploadsPlaylistId = (channelId: string) => `UU${channelId.slice(2)}`;
 export const shortsPlaylistId = (channelId: string) => `UUSH${channelId.slice(2)}`;
+export const videosPlaylistId = (channelId: string) => `UULF${channelId.slice(2)}`;
 
 export class YouTubeClient {
   private readonly apiKey: string;

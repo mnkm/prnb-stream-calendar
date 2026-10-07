@@ -18,7 +18,7 @@ export interface CalendarEvent {
   title: string;
   thumbnailUrl: string | null;
   durationSec: number | null;
-  /** カレンダー上の配置日時 (UTC ISO 8601)。ライブは開始(予定)時刻、それ以外は公開日時 */
+  /** カレンダー上の配置日時 (UTC ISO 8601)。ライブとプレミア公開は開始(予定)時刻、それ以外は公開日時 */
   eventAt: string;
   endedAt: string | null;
   publishedAt: string;
