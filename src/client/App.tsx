@@ -10,7 +10,8 @@ import { MonthView } from './components/MonthView';
 import { SearchResults } from './components/SearchResults';
 import { TimeGridView } from './components/TimeGridView';
 import { Toolbar } from './components/Toolbar';
-import { channelsQuery, eventsQuery, searchQuery, splitSearchTerms } from './lib/api';
+import { splitSearchTerms } from '../shared/search';
+import { channelsQuery, eventsQuery, searchQuery } from './lib/api';
 import {
   type ViewMode,
   groupByDay,

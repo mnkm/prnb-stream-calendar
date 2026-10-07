@@ -3,6 +3,7 @@ import {
   type ChannelRow,
   type VideoRow,
   deleteVideos,
+  fillSearchTitles,
   findActiveLiveIds,
   findExistingVideoIds,
   listEnabledChannels,
@@ -36,6 +37,8 @@ import {
  * Workers の 1 回あたりのサブリクエスト上限に収まるよう、残りは次回の Cron に持ち越す。
  */
 const BACKFILL_PAGES_PER_RUN = 8;
+/** 1 回の実行で search_title を埋める件数 */
+const SEARCH_TITLE_FILL_PER_RUN = 1000;
 
 export interface SyncEnv {
   DB: D1Database;
@@ -67,6 +70,13 @@ export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
       console.error(`sync failed for ${channel.id}`, err);
       results.push({ channelId: channel.id, mode, upserted: 0, removed: 0, error: String(err) });
     }
+  }
+
+  // 検索用の列を追加する前に登録した行を埋める(全部埋まっていれば何もしない)
+  try {
+    await fillSearchTitles(env.DB, SEARCH_TITLE_FILL_PER_RUN);
+  } catch (err) {
+    console.error('fillSearchTitles failed', err);
   }
   return results;
 }

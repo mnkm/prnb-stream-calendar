@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { splitSearchTerms } from '../shared/search';
 import { VIDEO_TYPES, type VideoType } from '../shared/types';
 import { listEnabledChannels, queryEvents, searchEvents, toChannel } from './db';
 import { syncAll } from './sync';
@@ -43,11 +44,12 @@ app.get('/events', async (c) => {
   return c.json(events);
 });
 
-/** キーワード検索。スペース(全角も可)で区切った語をすべて含むタイトルを、期間に関係なく新しい順に返す */
+/**
+ * キーワード検索。スペース(全角も可)で区切った語をすべて含むタイトルを、期間に関係なく新しい順に返す。
+ * 全角・半角、英字の大文字・小文字は区別しない
+ */
 app.get('/search', async (c) => {
-  const terms = (c.req.query('q') ?? '')
-    .split(/[\s　]+/)
-    .filter(Boolean)
+  const terms = splitSearchTerms(c.req.query('q') ?? '')
     .slice(0, MAX_SEARCH_TERMS)
     .map((t) => t.slice(0, MAX_SEARCH_TERM_LENGTH));
   if (terms.length === 0) return c.json({ error: 'q is required' }, 400);

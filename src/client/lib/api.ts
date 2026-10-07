@@ -29,6 +29,3 @@ export const searchQuery = (q: string) =>
     queryFn: () => getJson<SearchResult>(`/api/search?${new URLSearchParams({ q })}`),
     staleTime: 60_000,
   });
-
-/** 検索語をサーバーと同じ規則(空白・全角空白区切り)で分ける。結果の強調表示に使う */
-export const splitSearchTerms = (q: string) => q.split(/[\s　]+/).filter(Boolean);
