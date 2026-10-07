@@ -1,6 +1,7 @@
 import clsx from 'clsx';
 import { Calendar1, CalendarDays, CalendarRange, List, Monitor, Moon, Search, Sun, X } from 'lucide-react';
 import { motion } from 'motion/react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { Channel } from '../../shared/types';
 import type { ViewMode } from '../lib/calendar';
 import { THEME_ORDER, type ThemePreference, useThemePreference } from '../lib/theme';
@@ -94,30 +95,7 @@ export function Header({ channels, view, onViewChange, search, onSelectChannel, 
         </button>
         <ThemeToggle />
 
-        <div role="tablist" aria-label="表示切替" className="flex rounded-full border border-line bg-surface/80 p-1">
-          {VIEW_OPTIONS.map(({ value, label, icon: Icon }) => (
-            <button
-              key={value}
-              role="tab"
-              aria-selected={view === value}
-              onClick={() => onViewChange(value)}
-              className={clsx(
-                'relative flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors',
-                view === value ? 'text-canvas' : 'text-muted hover:text-ink',
-              )}
-            >
-              {view === value && (
-                <motion.span
-                  layoutId="view-pill"
-                  className="absolute inset-0 rounded-full bg-ink"
-                  transition={{ type: 'spring', bounce: 0.2, duration: 0.45 }}
-                />
-              )}
-              <Icon className="relative hidden size-3.5 sm:block" aria-hidden />
-              <span className="relative">{label}</span>
-            </button>
-          ))}
-        </div>
+        <ViewTabs view={view} onViewChange={onViewChange} />
       </div>
 
       {search.open && <SearchBar {...search} />}
@@ -168,6 +146,67 @@ function SearchBar({ value, onChange, onClose }: SearchProps) {
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 表示切り替えのタブ。選択中の背景は、タブの並びを基準にボタンの位置と幅を測って横に動かす。
+ * (以前は layoutId で動かしていたが、表示の切り替えでページの長さとスクロール位置が変わると、
+ *  固定表示のヘッダーの中でも背景が画面の下から飛び込んでくる動きになっていた)
+ */
+function ViewTabs({ view, onViewChange }: { view: ViewMode; onViewChange: (view: ViewMode) => void }) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const tabRefs = useRef(new Map<ViewMode, HTMLButtonElement>());
+  const [pill, setPill] = useState<{ x: number; width: number } | null>(null);
+
+  // 選択が変わったとき、と画面幅でボタンの幅が変わったとき(アイコンの表示の有無)に測り直す
+  useLayoutEffect(() => {
+    const measure = () => {
+      const tab = tabRefs.current.get(view);
+      if (tab) setPill({ x: tab.offsetLeft, width: tab.offsetWidth });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (listRef.current) observer.observe(listRef.current);
+    return () => observer.disconnect();
+  }, [view]);
+
+  return (
+    <div
+      ref={listRef}
+      role="tablist"
+      aria-label="表示切替"
+      className="relative flex rounded-full border border-line bg-surface/80 p-1"
+    >
+      {pill && (
+        <motion.span
+          aria-hidden
+          className="absolute inset-y-1 left-0 rounded-full bg-ink"
+          initial={false}
+          animate={{ x: pill.x, width: pill.width }}
+          transition={{ type: 'spring', bounce: 0.2, duration: 0.45 }}
+        />
+      )}
+      {VIEW_OPTIONS.map(({ value, label, icon: Icon }) => (
+        <button
+          key={value}
+          ref={(el) => {
+            if (el) tabRefs.current.set(value, el);
+            else tabRefs.current.delete(value);
+          }}
+          role="tab"
+          aria-selected={view === value}
+          onClick={() => onViewChange(value)}
+          className={clsx(
+            'relative flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors',
+            view === value ? 'text-canvas' : 'text-muted hover:text-ink',
+          )}
+        >
+          <Icon className="relative hidden size-3.5 sm:block" aria-hidden />
+          <span className="relative">{label}</span>
+        </button>
+      ))}
     </div>
   );
 }
