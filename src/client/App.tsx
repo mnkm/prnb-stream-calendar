@@ -1,9 +1,9 @@
 import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addMonths, format, startOfDay, startOfMonth } from 'date-fns';
 import { type PanInfo, motion, useDragControls } from 'motion/react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { type Channel, VIDEO_TYPES, type VideoType } from '../shared/types';
-import { ChannelDialog } from './components/ChannelDialog';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { VIDEO_TYPES, type VideoType } from '../shared/types';
+import { ChannelDialog, type ChannelDialogState } from './components/ChannelDialog';
 import { EventDialog, type DialogState } from './components/EventDialog';
 import { Header } from './components/Header';
 import { ListView } from './components/ListView';
@@ -73,8 +73,7 @@ export default function App() {
   const [types, setTypes] = useState<ReadonlySet<VideoType>>(() => new Set(VIDEO_TYPES));
   const [hiddenChannels, setHiddenChannels] = useState<ReadonlySet<string>>(() => new Set());
   const [dialog, setDialog] = useState<DialogState | null>(null);
-  const [profileChannel, setProfileChannel] = useState<Channel | null>(null);
-  const closeProfile = useCallback(() => setProfileChannel(null), []);
+  const [channelDialog, setChannelDialog] = useState<ChannelDialogState | null>(null);
 
   const { data: channels = [] } = useQuery(channelsQuery);
 
@@ -196,7 +195,8 @@ export default function App() {
           onOpen: () => setSearchOpen(true),
           onClose: closeSearch,
         }}
-        onSelectChannel={setProfileChannel}
+        onSelectChannel={(channel) => setChannelDialog({ kind: 'channel', channel })}
+        onOpenChannelList={() => setChannelDialog({ kind: 'list' })}
       />
 
       <main className="mx-auto max-w-7xl px-4 pb-20 sm:px-6">
@@ -301,7 +301,7 @@ export default function App() {
       </main>
 
       <EventDialog state={dialog} channelMap={channelMap} showChannelColor={showChannelColor} onChange={setDialog} />
-      <ChannelDialog channel={profileChannel} onClose={closeProfile} />
+      <ChannelDialog state={channelDialog} channels={channels} onChange={setChannelDialog} />
     </div>
   );
 }

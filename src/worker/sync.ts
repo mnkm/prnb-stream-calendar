@@ -1,31 +1,32 @@
 import type { LiveStatus } from '../shared/types';
+import { RequestBudget, countD1 } from './budget';
 import {
   type ChannelProfile,
   type ChannelRow,
   type VideoRow,
-  deleteVideos,
+  deleteVideosStmt,
   fillSearchTitles,
   findActiveLiveIds,
   findExistingVideoIds,
   listEnabledChannels,
-  markChannelSynced,
-  markMembersOnly,
-  markPremieres,
-  markShorts,
+  markChannelSyncedStmt,
+  markMembersOnlyStmt,
+  markPremieresStmt,
+  markShortsStmt,
   saveBackfillProgress,
   saveMembersScanProgress,
   savePremieresScanProgress,
   updateChannelProfile,
-  upsertVideos,
+  upsertVideoStmts,
+  writeBatch,
 } from './db';
 import { toIsoSeconds } from './time';
 import {
+  RequestBudgetExceededError,
   SHORTS_MAX_DURATION_SEC,
   type YtChannel,
   type YtVideo,
   YouTubeClient,
-  fetchRssVideoIds,
-  isShortByUrl,
   membersPlaylistId,
   membersVideosPlaylistId,
   parseDuration,
@@ -35,8 +36,25 @@ import {
 } from './youtube';
 
 /**
- * 1 回の実行で過去分を取得するページ数(1 ページ = 50 件)。
- * Workers の 1 回あたりのサブリクエスト上限に収まるよう、残りは次回の Cron に持ち越す。
+ * 1 回の実行で使うサブリクエスト(YouTube への fetch + D1 の呼び出し)の予算。
+ * Workers 無料プランの上限(50)から、最後の後片付け(検索用の列の補完)の分を残した値
+ */
+const REQUEST_BUDGET = 45;
+/**
+ * 差分同期 1 チャンネル分に必要なサブリクエスト数の上限。
+ * YouTube 5 回(RSS・UUMO・UUSH・UULF・videos.list)+ D1 3 回(読み取り 2・書き込み 1)+ プロフィール 2 回
+ */
+const INCREMENTAL_REQUESTS = 10;
+/**
+ * 1 回の実行で差分同期するチャンネル数。最後に同期してから時間がたったものから順に回す。
+ * Cron は 5 分ごとなので、6 チャンネルならそれぞれ約 15 分ごとに同期される
+ */
+const INCREMENTAL_CHANNELS_PER_RUN = 2;
+/** 過去分の取得やメンバー限定の取り込みを 1 ページ進めるのに必要な数(playlistItems + videos.list + D1 書き込み) */
+const PAGE_REQUESTS = 3;
+/**
+ * 1 回の実行で過去分を取得するページ数の上限(1 ページ = 50 件)。
+ * 実際には REQUEST_BUDGET の残りの範囲で進め、続きは次回の Cron に持ち越す
  */
 const BACKFILL_PAGES_PER_RUN = 8;
 /** 1 回の実行で search_title を埋める件数 */
@@ -51,38 +69,92 @@ export interface SyncEnv {
 
 export interface ChannelSyncResult {
   channelId: string;
-  mode: 'backfill' | 'incremental';
+  /** backfill = 過去分の取得、incremental = 差分同期、scan = 一度だけの補正(プレミア公開・メンバー限定) */
+  mode: 'backfill' | 'incremental' | 'scan';
   upserted: number;
   removed: number;
   backfillStage?: string;
   error?: string;
 }
 
+/**
+ * 15 分ごとの同期。リクエスト数の予算を、まず取り込み済みチャンネルの差分同期(新着・配信状況)に使い、
+ * 残りで過去分の取得と一度だけの補正を進める。チャンネルが増えても新着の反映が遅れないようにするため
+ */
 export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
-  const yt = new YouTubeClient(env.YOUTUBE_API_KEY);
-  const channels = await listEnabledChannels(env.DB);
+  const budget = new RequestBudget(REQUEST_BUDGET);
+  const db = countD1(env.DB, budget);
+  const yt = new YouTubeClient(env.YOUTUBE_API_KEY, budget);
+  const channels = await listEnabledChannels(db);
   const results: ChannelSyncResult[] = [];
 
-  for (const channel of channels) {
-    const mode = channel.backfill_stage === 'done' ? 'incremental' : 'backfill';
-    try {
-      await ensureChannelProfile(env.DB, yt, channel);
-      results.push(
-        mode === 'backfill' ? await backfillStep(env.DB, yt, channel) : await incrementalSync(env.DB, yt, channel),
-      );
-    } catch (err) {
-      console.error(`sync failed for ${channel.id}`, err);
-      results.push({ channelId: channel.id, mode, upserted: 0, removed: 0, error: String(err) });
+  // 1. 取り込み済みチャンネルの差分同期。最後に同期してから時間がたったものから、決まった数だけ行う
+  const due = channels
+    .filter((c) => c.backfill_stage === 'done')
+    .sort((a, b) => (a.synced_at ?? '').localeCompare(b.synced_at ?? ''))
+    .slice(0, INCREMENTAL_CHANNELS_PER_RUN);
+  for (const channel of due) {
+    if (budget.remaining < INCREMENTAL_REQUESTS) {
+      results.push(skipped(channel, 'incremental'));
+      continue;
     }
+    results.push(
+      await runSafely(channel, 'incremental', async () => {
+        await ensureChannelProfile(db, yt, channel);
+        return incrementalSync(db, yt, channel);
+      }),
+    );
   }
 
-  // 検索用の列を追加する前に登録した行を埋める(全部埋まっていれば何もしない)
+  // 2. 残りの予算で、過去分の取得と一度だけの補正を sort_order の順に進める
+  for (const channel of channels) {
+    const mode = channel.backfill_stage !== 'done' ? 'backfill' : needsScan(channel) ? 'scan' : null;
+    if (!mode) continue;
+    if (budget.remaining < PAGE_REQUESTS + 2) {
+      results.push(skipped(channel, mode));
+      continue;
+    }
+    results.push(
+      await runSafely(channel, mode, async () => {
+        if (mode === 'scan') return oneTimeScans(db, yt, budget, channel);
+        await ensureChannelProfile(db, yt, channel);
+        return backfillStep(db, yt, budget, channel);
+      }),
+    );
+  }
+
+  // 検索用の列を追加する前に登録した行を埋める(全部埋まっていれば読み取り 1 回だけ)
   try {
-    await fillSearchTitles(env.DB, SEARCH_TITLE_FILL_PER_RUN);
+    await fillSearchTitles(db, SEARCH_TITLE_FILL_PER_RUN);
   } catch (err) {
     console.error('fillSearchTitles failed', err);
   }
   return results;
+}
+
+const needsScan = (channel: ChannelRow) => !channel.premieres_scanned_at || !channel.members_scanned_at;
+
+const skipped = (channel: ChannelRow, mode: ChannelSyncResult['mode']): ChannelSyncResult => ({
+  channelId: channel.id,
+  mode,
+  upserted: 0,
+  removed: 0,
+  error: 'skipped: request budget',
+});
+
+/** 1 チャンネル分の処理を行い、失敗しても他のチャンネルの同期は続ける */
+async function runSafely(
+  channel: ChannelRow,
+  mode: ChannelSyncResult['mode'],
+  run: () => Promise<ChannelSyncResult>,
+): Promise<ChannelSyncResult> {
+  try {
+    return await run();
+  } catch (err) {
+    if (err instanceof RequestBudgetExceededError) console.warn(`request budget ran out during ${channel.id}`);
+    else console.error(`sync failed for ${channel.id}`, err);
+    return { channelId: channel.id, mode, upserted: 0, removed: 0, error: String(err) };
+  }
 }
 
 /** チャンネルのプロフィールを 1 日 1 回取り直す(1 unit)。名前とアイコンがまだ無いときはすぐ取る */
@@ -118,24 +190,30 @@ function toChannelProfile(info: YtChannel): ChannelProfile {
 }
 
 /** 過去分の取得。uploads を全件 → UUSH でショートを判定、の順に数回の Cron に分けて進める */
-async function backfillStep(db: D1Database, yt: YouTubeClient, channel: ChannelRow): Promise<ChannelSyncResult> {
+async function backfillStep(
+  db: D1Database,
+  yt: YouTubeClient,
+  budget: RequestBudget,
+  channel: ChannelRow,
+): Promise<ChannelSyncResult> {
   let stage = channel.backfill_stage;
   let pageToken = channel.backfill_page_token ?? undefined;
   let upserted = 0;
 
-  for (let i = 0; i < BACKFILL_PAGES_PER_RUN && stage !== 'done'; i++) {
+  // 最後の進み具合の保存(D1 1 回)の分を残して進める
+  for (let i = 0; i < BACKFILL_PAGES_PER_RUN && stage !== 'done' && budget.remaining > PAGE_REQUESTS; i++) {
     if (stage === 'uploads') {
       const page = await yt.listPlaylistPage(uploadsPlaylistId(channel.id), pageToken);
       if (page) {
         const rows = (await yt.getVideos(page.ids)).map((v) => toVideoRow(v, false, false));
-        await upsertVideos(db, rows, nowIso());
+        await writeBatch(db, upsertVideoStmts(db, rows, nowIso()));
         upserted += rows.length;
       }
       pageToken = page?.nextPageToken;
       if (!pageToken) stage = 'shorts';
     } else {
       const page = await yt.listPlaylistPage(shortsPlaylistId(channel.id), pageToken);
-      if (page) await markShorts(db, page.ids);
+      if (page) await writeBatch(db, [markShortsStmt(db, page.ids)]);
       pageToken = page?.nextPageToken;
       if (!pageToken) stage = 'done';
     }
@@ -149,8 +227,9 @@ async function backfillStep(db: D1Database, yt: YouTubeClient, channel: ChannelR
 async function incrementalSync(db: D1Database, yt: YouTubeClient, channel: ChannelRow): Promise<ChannelSyncResult> {
   let latestIds: string[];
   try {
-    latestIds = await fetchRssVideoIds(channel.id);
+    latestIds = await yt.fetchRssVideoIds(channel.id);
   } catch (err) {
+    if (err instanceof RequestBudgetExceededError) throw err;
     console.warn(`RSS unavailable for ${channel.id}, falling back to playlistItems`, err);
     latestIds = (await yt.listPlaylistPage(uploadsPlaylistId(channel.id)))?.ids ?? [];
   }
@@ -171,45 +250,55 @@ async function incrementalSync(db: D1Database, yt: YouTubeClient, channel: Chann
   const videos = targetIds.length > 0 ? await yt.getVideos(targetIds) : [];
 
   if (!shortsPage) {
-    for (const v of videos) {
-      const duration = parseDuration(v.contentDetails?.duration);
-      const maybeShort = !v.liveStreamingDetails && duration !== null && duration <= SHORTS_MAX_DURATION_SEC;
-      if (maybeShort && (await isShortByUrl(v.id))) shortIds.add(v.id);
+    try {
+      for (const v of videos) {
+        const duration = parseDuration(v.contentDetails?.duration);
+        const maybeShort = !v.liveStreamingDetails && duration !== null && duration <= SHORTS_MAX_DURATION_SEC;
+        if (maybeShort && (await yt.isShortByUrl(v.id))) shortIds.add(v.id);
+      }
+    } catch (err) {
+      // 予算を使い切ったら、残りは次回以降の UUSH での補正に任せる
+      if (!(err instanceof RequestBudgetExceededError)) throw err;
     }
   }
-
-  const now = nowIso();
-  await upsertVideos(db, videos.map((v) => toVideoRow(v, shortIds.has(v.id), premiereIds.has(v.id))), now);
-  // UUSH / UULF への反映が遅れて誤った種別で登録されたものを後から補正する
-  if (shortsPage) await markShorts(db, shortsPage.ids);
-  if (videosPage) await markPremieres(db, videosPage.ids);
-  if (membersPage) await markMembersOnly(db, membersPage.ids);
-  if (!channel.premieres_scanned_at) await scanPremieres(db, yt, channel);
-  const membersUpserted = channel.members_scanned_at ? 0 : await scanMembers(db, yt, channel);
 
   // 予定枠が削除・非公開化された場合は videos.list に返ってこないので、カレンダーからも消す
   const returned = new Set(videos.map((v) => v.id));
   const removedIds = activeLiveIds.filter((id) => !returned.has(id));
-  await deleteVideos(db, removedIds);
 
-  await markChannelSynced(db, channel.id, now);
-  return {
-    channelId: channel.id,
-    mode: 'incremental',
-    upserted: videos.length + membersUpserted,
-    removed: removedIds.length,
-  };
+  // 書き込みは 1 回の batch にまとめる。UUSH / UULF / UUMO の先頭ページで、
+  // 反映が遅れて誤った種別で登録されたものも後から補正する
+  const now = nowIso();
+  await writeBatch(db, [
+    ...upsertVideoStmts(db, videos.map((v) => toVideoRow(v, shortIds.has(v.id), premiereIds.has(v.id))), now),
+    markShortsStmt(db, shortsPage?.ids ?? []),
+    markPremieresStmt(db, videosPage?.ids ?? []),
+    markMembersOnlyStmt(db, membersPage?.ids ?? []),
+    deleteVideosStmt(db, removedIds),
+    markChannelSyncedStmt(db, channel.id, now),
+  ]);
+  return { channelId: channel.id, mode: 'incremental', upserted: videos.length, removed: removedIds.length };
 }
 
-/**
- * 過去分の取り込み後に 1 回だけ、UULF を最後まで見てプレミア公開を動画に分類し直す。
- * ページ数が多い場合は次回の Cron に持ち越す
- */
-async function scanPremieres(db: D1Database, yt: YouTubeClient, channel: ChannelRow) {
+/** 過去分の取得のあとに 1 回だけ行う補正。終わるまで、残りの予算の範囲で毎回少しずつ進める */
+async function oneTimeScans(
+  db: D1Database,
+  yt: YouTubeClient,
+  budget: RequestBudget,
+  channel: ChannelRow,
+): Promise<ChannelSyncResult> {
+  if (!channel.premieres_scanned_at) await scanPremieres(db, yt, budget, channel);
+  const upserted = channel.members_scanned_at ? 0 : await scanMembers(db, yt, budget, channel);
+  return { channelId: channel.id, mode: 'scan', upserted, removed: 0 };
+}
+
+/** UULF を最後まで見て、ライブとして登録されたプレミア公開を動画に分類し直す */
+async function scanPremieres(db: D1Database, yt: YouTubeClient, budget: RequestBudget, channel: ChannelRow) {
   let pageToken = channel.premieres_page_token ?? undefined;
-  for (let i = 0; i < BACKFILL_PAGES_PER_RUN; i++) {
+  // 1 ページ = playlistItems + D1 書き込み。最後の進み具合の保存の分を残す
+  for (let i = 0; i < BACKFILL_PAGES_PER_RUN && budget.remaining > 2; i++) {
     const page = await yt.listPlaylistPage(videosPlaylistId(channel.id), pageToken);
-    if (page) await markPremieres(db, page.ids);
+    if (page) await writeBatch(db, [markPremieresStmt(db, page.ids)]);
     pageToken = page?.nextPageToken;
     if (!pageToken) break;
   }
@@ -217,33 +306,30 @@ async function scanPremieres(db: D1Database, yt: YouTubeClient, channel: Channel
 }
 
 /**
- * 過去分の取り込み後に 1 回だけ、UUMO を最後まで見てメンバー限定を取り込む。
- * 最後のページまで進んだら、UUMF でメンバー限定のプレミア公開を動画に分類し直す
+ * UUMO を最後まで見て、メンバー限定を取り込む。
+ * メンバー限定のプレミア公開は UUMF の先頭ページで判定する(メンバー限定の動画は少ないため)
  */
-async function scanMembers(db: D1Database, yt: YouTubeClient, channel: ChannelRow): Promise<number> {
+async function scanMembers(
+  db: D1Database,
+  yt: YouTubeClient,
+  budget: RequestBudget,
+  channel: ChannelRow,
+): Promise<number> {
+  // UUMF 1 回 + 1 ページ以上 + 進み具合の保存 1 回が入らなければ、次回に回す
+  if (budget.remaining < PAGE_REQUESTS + 2) return 0;
+  const premiereIds = new Set((await yt.listPlaylistPage(membersVideosPlaylistId(channel.id)))?.ids ?? []);
+
   let pageToken = channel.members_page_token ?? undefined;
   let upserted = 0;
-  for (let i = 0; i < BACKFILL_PAGES_PER_RUN; i++) {
+  for (let i = 0; i < BACKFILL_PAGES_PER_RUN && budget.remaining > PAGE_REQUESTS; i++) {
     const page = await yt.listPlaylistPage(membersPlaylistId(channel.id), pageToken);
     if (page) {
-      const rows = (await yt.getVideos(page.ids)).map((v) => toVideoRow(v, false, false));
-      await upsertVideos(db, rows, nowIso());
-      await markMembersOnly(db, page.ids);
+      const rows = (await yt.getVideos(page.ids)).map((v) => toVideoRow(v, false, premiereIds.has(v.id)));
+      await writeBatch(db, [...upsertVideoStmts(db, rows, nowIso()), markMembersOnlyStmt(db, page.ids)]);
       upserted += rows.length;
     }
     pageToken = page?.nextPageToken;
     if (!pageToken) break;
-  }
-
-  if (!pageToken) {
-    // UUMF は件数が少ないので、進み具合は保存せず 1 回で読み切る(上限を超えた分は諦める)
-    let premiereToken: string | undefined;
-    for (let i = 0; i < BACKFILL_PAGES_PER_RUN; i++) {
-      const page = await yt.listPlaylistPage(membersVideosPlaylistId(channel.id), premiereToken);
-      if (page) await markPremieres(db, page.ids);
-      premiereToken = page?.nextPageToken;
-      if (!premiereToken) break;
-    }
   }
   await saveMembersScanProgress(db, channel.id, pageToken ?? null, nowIso());
   return upserted;
