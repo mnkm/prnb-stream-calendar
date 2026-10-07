@@ -38,8 +38,7 @@ function initialDate() {
 
 function initialView(): ViewMode {
   const fromUrl = parseViewParam(new URLSearchParams(location.search).get('view'));
-  if (fromUrl) return fromUrl;
-  return window.matchMedia('(min-width: 768px)').matches ? 'month' : 'list';
+  return fromUrl ?? 'week';
 }
 
 const initialQuery = () => new URLSearchParams(location.search).get('q') ?? '';
