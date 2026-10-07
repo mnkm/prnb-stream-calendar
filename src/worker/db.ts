@@ -149,8 +149,17 @@ export async function saveMembersScanProgress(db: D1Database, id: string, pageTo
     .run();
 }
 
-export async function markChannelSynced(db: D1Database, id: string, now: string) {
-  await db.prepare('UPDATE channels SET synced_at = ? WHERE id = ?').bind(now, id).run();
+/**
+ * 書き込みをまとめて 1 回の batch() で行う(null は飛ばす)。
+ * Workers 無料プランでは D1 の呼び出し回数も 1 回の実行あたりの上限に数えられるため、書き込みはできるだけまとめる
+ */
+export async function writeBatch(db: D1Database, stmts: (D1PreparedStatement | null)[]) {
+  const list = stmts.filter((s): s is D1PreparedStatement => s !== null);
+  if (list.length > 0) await db.batch(list);
+}
+
+export function markChannelSyncedStmt(db: D1Database, id: string, now: string) {
+  return db.prepare('UPDATE channels SET synced_at = ? WHERE id = ?').bind(now, id);
 }
 
 export async function findExistingVideoIds(db: D1Database, ids: string[]): Promise<Set<string>> {
@@ -171,8 +180,8 @@ export async function findActiveLiveIds(db: D1Database, channelId: string): Prom
   return results.map((r) => r.id);
 }
 
-export async function upsertVideos(db: D1Database, rows: VideoRow[], now: string) {
-  if (rows.length === 0) return;
+export function upsertVideoStmts(db: D1Database, rows: VideoRow[], now: string): D1PreparedStatement[] {
+  if (rows.length === 0) return [];
   const stmt = db.prepare(
     `INSERT INTO videos (id, channel_id, type, live_status, title, search_title, thumbnail_url, duration_sec,
                          event_at, ended_at, published_at, updated_at)
@@ -195,12 +204,10 @@ export async function upsertVideos(db: D1Database, rows: VideoRow[], now: string
        published_at  = excluded.published_at,
        updated_at    = excluded.updated_at`,
   );
-  await db.batch(
-    rows.map((r) =>
-      stmt.bind(
-        r.id, r.channel_id, r.type, r.live_status, r.title, normalizeForSearch(r.title), r.thumbnail_url,
-        r.duration_sec, r.event_at, r.ended_at, r.published_at, now,
-      ),
+  return rows.map((r) =>
+    stmt.bind(
+      r.id, r.channel_id, r.type, r.live_status, r.title, normalizeForSearch(r.title), r.thumbnail_url,
+      r.duration_sec, r.event_at, r.ended_at, r.published_at, now,
     ),
   );
 }
@@ -224,34 +231,31 @@ export async function fillSearchTitles(db: D1Database, limit: number): Promise<n
   return results.length;
 }
 
-export async function markShorts(db: D1Database, ids: string[]) {
-  if (ids.length === 0) return;
-  await db
+export function markShortsStmt(db: D1Database, ids: string[]) {
+  if (ids.length === 0) return null;
+  return db
     .prepare(`UPDATE videos SET type = 'short' WHERE type = 'video' AND id IN (${placeholders(ids.length)})`)
-    .bind(...ids)
-    .run();
+    .bind(...ids);
 }
 
 /** UULF に含まれるライブ扱いの動画はプレミア公開なので、動画に分類し直す */
-export async function markPremieres(db: D1Database, ids: string[]) {
-  if (ids.length === 0) return;
-  await db
+export function markPremieresStmt(db: D1Database, ids: string[]) {
+  if (ids.length === 0) return null;
+  return db
     .prepare(`UPDATE videos SET type = 'video' WHERE type = 'live' AND id IN (${placeholders(ids.length)})`)
-    .bind(...ids)
-    .run();
+    .bind(...ids);
 }
 
-export async function markMembersOnly(db: D1Database, ids: string[]) {
-  if (ids.length === 0) return;
-  await db
+export function markMembersOnlyStmt(db: D1Database, ids: string[]) {
+  if (ids.length === 0) return null;
+  return db
     .prepare(`UPDATE videos SET members_only = 1 WHERE members_only = 0 AND id IN (${placeholders(ids.length)})`)
-    .bind(...ids)
-    .run();
+    .bind(...ids);
 }
 
-export async function deleteVideos(db: D1Database, ids: string[]) {
-  if (ids.length === 0) return;
-  await db.prepare(`DELETE FROM videos WHERE id IN (${placeholders(ids.length)})`).bind(...ids).run();
+export function deleteVideosStmt(db: D1Database, ids: string[]) {
+  if (ids.length === 0) return null;
+  return db.prepare(`DELETE FROM videos WHERE id IN (${placeholders(ids.length)})`).bind(...ids);
 }
 
 export interface EventQuery {

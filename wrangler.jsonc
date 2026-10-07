@@ -21,8 +21,8 @@
     }
   ],
 
-  // 15 分ごとに YouTube と同期
-  "triggers": { "crons": ["*/15 * * * *"] }
+  // 5 分ごとに YouTube と同期。1 回に差分同期するのは 2 チャンネルまで(Workers 無料プランのサブリクエスト上限のため)
+  "triggers": { "crons": ["*/5 * * * *"] }
 
   // シークレット(コミットしない):
   //   YOUTUBE_API_KEY … YouTube Data API v3 の API キー

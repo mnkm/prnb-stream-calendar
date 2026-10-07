@@ -1,3 +1,5 @@
+import type { RequestBudget } from './budget';
+
 const API_BASE = 'https://www.googleapis.com/youtube/v3';
 
 /** ショート判定に使う時間の上限(2024 年 10 月以降、ショートは最大 3 分) */
@@ -62,11 +64,26 @@ export const videosPlaylistId = (channelId: string) => `UULF${channelId.slice(2)
 export const membersPlaylistId = (channelId: string) => `UUMO${channelId.slice(2)}`;
 export const membersVideosPlaylistId = (channelId: string) => `UUMF${channelId.slice(2)}`;
 
+/** 1 回の実行で使えるサブリクエストの予算を使い切った */
+export class RequestBudgetExceededError extends Error {}
+
+/**
+ * YouTube への外部リクエスト(API・RSS・/shorts の確認)をまとめて行い、予算に数える。
+ * Workers は 1 回の実行で出せるサブリクエスト数に上限があるため、予算を超えるリクエストはエラーにする
+ */
 export class YouTubeClient {
   private readonly apiKey: string;
+  private readonly budget: RequestBudget;
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, budget: RequestBudget) {
     this.apiKey = apiKey;
+    this.budget = budget;
+  }
+
+  private async request(input: string | URL, init?: RequestInit): Promise<Response> {
+    if (this.budget.remaining <= 0) throw new RequestBudgetExceededError('request budget exceeded');
+    this.budget.take();
+    return fetch(input, init);
   }
 
   private async get<T>(resource: string, params: Record<string, string>): Promise<T> {
@@ -74,7 +91,7 @@ export class YouTubeClient {
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
     url.searchParams.set('key', this.apiKey);
 
-    const res = await fetch(url);
+    const res = await this.request(url);
     if (!res.ok) {
       throw new YouTubeApiError(res.status, `YouTube ${resource} failed: ${res.status} ${await res.text()}`);
     }
@@ -125,20 +142,23 @@ export class YouTubeClient {
     }
     return videos;
   }
-}
 
-/** RSS フィードから最新 15 件の動画 ID を取得(クォータ消費なし) */
-export async function fetchRssVideoIds(channelId: string): Promise<string[]> {
-  const res = await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`);
-  if (!res.ok) throw new Error(`RSS fetch failed: ${res.status}`);
-  const xml = await res.text();
-  return [...xml.matchAll(/<yt:videoId>([\w-]{11})<\/yt:videoId>/g)].map((m) => m[1]);
-}
+  /** RSS フィードから最新 15 件の動画 ID を取得(クォータ消費なし) */
+  async fetchRssVideoIds(channelId: string): Promise<string[]> {
+    const res = await this.request(`https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`);
+    if (!res.ok) throw new Error(`RSS fetch failed: ${res.status}`);
+    const xml = await res.text();
+    return [...xml.matchAll(/<yt:videoId>([\w-]{11})<\/yt:videoId>/g)].map((m) => m[1]);
+  }
 
-/** UUSH プレイリストが使えない場合のフォールバック。/shorts/{id} がリダイレクトされなければショート */
-export async function isShortByUrl(videoId: string): Promise<boolean> {
-  const res = await fetch(`https://www.youtube.com/shorts/${videoId}`, { method: 'HEAD', redirect: 'manual' });
-  return res.status === 200;
+  /** UUSH プレイリストが使えない場合のフォールバック。/shorts/{id} がリダイレクトされなければショート */
+  async isShortByUrl(videoId: string): Promise<boolean> {
+    const res = await this.request(`https://www.youtube.com/shorts/${videoId}`, {
+      method: 'HEAD',
+      redirect: 'manual',
+    });
+    return res.status === 200;
+  }
 }
 
 /** ISO 8601 の duration (PT1H2M3S) を秒に変換 */
