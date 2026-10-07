@@ -39,7 +39,8 @@ function initialDate() {
 function initialView(): ViewMode {
   const fromUrl = parseViewParam(new URLSearchParams(location.search).get('view'));
   if (fromUrl) return fromUrl;
-  return window.matchMedia('(min-width: 768px)').matches ? 'month' : 'list';
+  // スマホ(768px 未満)は週表示だと列が細すぎるので、リスト表示で開く
+  return window.matchMedia('(min-width: 768px)').matches ? 'week' : 'list';
 }
 
 const initialQuery = () => new URLSearchParams(location.search).get('q') ?? '';
