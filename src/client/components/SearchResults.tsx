@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { type CalendarEvent, type Channel, VIDEO_TYPES, type VideoType } from '../../shared/types';
 import { dayKey } from '../lib/calendar';
 import { EventRow } from './EventRow';
+import { ScrollToTop } from './ScrollToTop';
 import { TypeFilters } from './Toolbar';
 
 /** リストの最後がこの距離まで近づいたら、続きを読み込み始める */
@@ -143,6 +144,8 @@ export function SearchResults({
       {!hasNextPage && !isLoading && events.length > 0 && (
         <p className="py-4 text-center text-xs text-muted">すべての結果を表示しました</p>
       )}
+
+      <ScrollToTop />
     </div>
   );
 }
