@@ -1,10 +1,10 @@
-import { ArrowLeft, Clock, Crown, ExternalLink, Play, Timer, X } from 'lucide-react';
-import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useState } from 'react';
+import { ArrowLeft, Clock, Crown, ExternalLink, Play, Timer } from 'lucide-react';
+import { useCallback, useState } from 'react';
 import type { CalendarEvent, Channel } from '../../shared/types';
 import { formatDayHeading, formatDuration, formatEventWhen, watchUrl } from '../lib/format';
 import { LiveStatusBadge, MembersOnlyBadge, TypeBadge } from './Badges';
 import { EventRow } from './EventRow';
+import { Modal } from './Modal';
 import { Thumbnail } from './Thumbnail';
 
 export type DialogState =
@@ -19,75 +19,32 @@ interface Props {
 }
 
 export function EventDialog({ state, channelMap, showChannelColor, onChange }: Props) {
-  const open = state !== null;
-  const close = () => onChange(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onChange(null);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    window.addEventListener('keydown', onKey);
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [open, onChange]);
+  const close = useCallback(() => onChange(null), [onChange]);
 
   return (
-    <AnimatePresence>
-      {state && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-6">
-          <motion.div
-            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={close}
-          />
-          <motion.div
-            role="dialog"
-            aria-modal="true"
-            className="relative max-h-[90dvh] w-full overflow-y-auto rounded-t-3xl border border-line bg-surface shadow-2xl sm:max-w-xl sm:rounded-3xl"
-            initial={{ opacity: 0, y: 40, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 24, scale: 0.98 }}
-            transition={{ type: 'spring', bounce: 0.15, duration: 0.45 }}
-          >
-            <button
-              autoFocus
-              aria-label="閉じる"
-              onClick={close}
-              className="absolute top-3 right-3 z-10 grid size-9 place-items-center rounded-full bg-black/40 text-white backdrop-blur transition hover:bg-black/60"
-            >
-              <X className="size-4" />
-            </button>
-
-            {state.kind === 'event' ? (
-              <EventDetail
-                key={state.event.id}
-                event={state.event}
-                onBack={state.day ? () => onChange({ kind: 'day', ...state.day! }) : undefined}
+    <Modal open={state !== null} onClose={close}>
+      {state?.kind === 'event' ? (
+        <EventDetail
+          key={state.event.id}
+          event={state.event}
+          onBack={state.day ? () => onChange({ kind: 'day', ...state.day! }) : undefined}
+        />
+      ) : state?.kind === 'day' ? (
+        <div className="p-5 pt-6">
+          <h2 className="mb-4 pr-10 text-lg font-semibold">{formatDayHeading(state.date)}</h2>
+          <div className="flex flex-col gap-2.5">
+            {state.events.map((event) => (
+              <EventRow
+                key={event.id}
+                event={event}
+                channelColor={showChannelColor ? channelMap.get(event.channelId)?.color : undefined}
+                onClick={() => onChange({ kind: 'event', event, day: { date: state.date, events: state.events } })}
               />
-            ) : (
-              <div className="p-5 pt-6">
-                <h2 className="mb-4 pr-10 text-lg font-semibold">{formatDayHeading(state.date)}</h2>
-                <div className="flex flex-col gap-2.5">
-                  {state.events.map((event) => (
-                    <EventRow
-                      key={event.id}
-                      event={event}
-                      channelColor={showChannelColor ? channelMap.get(event.channelId)?.color : undefined}
-                      onClick={() => onChange({ kind: 'event', event, day: { date: state.date, events: state.events } })}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-          </motion.div>
+            ))}
+          </div>
         </div>
-      )}
-    </AnimatePresence>
+      ) : null}
+    </Modal>
   );
 }
 

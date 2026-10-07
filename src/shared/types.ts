@@ -8,6 +8,13 @@ export interface Channel {
   title: string;
   iconUrl: string | null;
   color: string;
+  description: string | null;
+  /** @ハンドル(例: @yurausui) */
+  customUrl: string | null;
+  bannerUrl: string | null;
+  /** 登録者数。非公開なら null */
+  subscriberCount: number | null;
+  videoCount: number | null;
 }
 
 export interface CalendarEvent {
