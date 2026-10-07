@@ -1,12 +1,13 @@
 import clsx from 'clsx';
-import { CalendarDays, List } from 'lucide-react';
+import { Calendar1, CalendarDays, CalendarRange, List } from 'lucide-react';
 import { motion } from 'motion/react';
 import type { Channel } from '../../shared/types';
-
-export type ViewMode = 'month' | 'list';
+import type { ViewMode } from '../lib/calendar';
 
 const VIEW_OPTIONS: { value: ViewMode; label: string; icon: typeof List }[] = [
   { value: 'month', label: '月', icon: CalendarDays },
+  { value: 'week', label: '週', icon: CalendarRange },
+  { value: 'day', label: '日', icon: Calendar1 },
   { value: 'list', label: 'リスト', icon: List },
 ];
 
@@ -37,7 +38,7 @@ export function Header({ channels, view, onViewChange }: Props) {
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-medium tracking-[0.18em] text-muted uppercase">Stream Calendar</p>
+          <p className="truncate text-[11px] font-medium tracking-[0.18em] text-muted uppercase">Stream Calendar</p>
           <p className="truncate text-sm font-semibold">
             {channels.length > 1 ? `${channels.length} チャンネル` : (primary?.title ?? '読み込み中…')}
           </p>
@@ -62,7 +63,7 @@ export function Header({ channels, view, onViewChange }: Props) {
                   transition={{ type: 'spring', bounce: 0.2, duration: 0.45 }}
                 />
               )}
-              <Icon className="relative size-3.5" aria-hidden />
+              <Icon className="relative hidden size-3.5 sm:block" aria-hidden />
               <span className="relative">{label}</span>
             </button>
           ))}
