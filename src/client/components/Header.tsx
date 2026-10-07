@@ -38,57 +38,43 @@ interface Props {
   onOpenChannelList: () => void;
 }
 
-// ヘッダーに並べるチャンネルアイコンの数。超えた分は「+N」にまとめる(スマホは横幅が足りないので 1 つ)
-const MOBILE_AVATARS = 1;
-const DESKTOP_AVATARS = 4;
-
 export function Header({ channels, view, onViewChange, search, onSelectChannel, onOpenChannelList }: Props) {
-  const primary = channels[0];
-  const moreOnMobile = channels.length - MOBILE_AVATARS;
-  const moreOnDesktop = channels.length - DESKTOP_AVATARS;
+  // チャンネルアイコンは先頭の 1 つだけ並べ、残りは「+N」にまとめる(押すとチャンネル一覧)
+  const first = channels[0];
+  const more = channels.length - 1;
 
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-canvas/70 backdrop-blur-xl">
       <div className="mx-auto flex max-w-7xl items-center gap-2 px-4 py-3 sm:gap-3 sm:px-6">
         <div className="flex shrink-0 -space-x-2">
-          {channels.slice(0, DESKTOP_AVATARS).map((ch, i) => (
+          {first && (
             <button
-              key={ch.id}
-              onClick={() => onSelectChannel(ch)}
-              aria-label={`${ch.title} のチャンネル情報`}
-              title={ch.title}
-              className={clsx(
-                'relative rounded-full transition hover:z-10 hover:scale-105 focus-visible:z-10',
-                i >= MOBILE_AVATARS && 'hidden sm:block',
-              )}
+              onClick={() => onSelectChannel(first)}
+              aria-label={`${first.title} のチャンネル情報`}
+              title={first.title}
+              className="relative rounded-full transition hover:z-10 hover:scale-105 focus-visible:z-10"
             >
-              {ch.iconUrl ? (
-                <img src={ch.iconUrl} alt="" className="size-9 rounded-full object-cover ring-2 ring-canvas" />
+              {first.iconUrl ? (
+                <img src={first.iconUrl} alt="" className="size-9 rounded-full object-cover ring-2 ring-canvas" />
               ) : (
-                <div className="size-9 rounded-full ring-2 ring-canvas" style={{ background: ch.color }} />
+                <div className="size-9 rounded-full ring-2 ring-canvas" style={{ background: first.color }} />
               )}
             </button>
-          ))}
-          {moreOnMobile > 0 && (
+          )}
+          {more > 0 && (
             <button
               onClick={onOpenChannelList}
               aria-label={`チャンネル一覧(全 ${channels.length} チャンネル)`}
               title="チャンネル一覧"
-              className={clsx(
-                'relative grid size-9 place-items-center rounded-full bg-surface text-xs font-semibold text-muted ring-2 ring-canvas transition tabular-nums hover:z-10 hover:scale-105 hover:text-ink',
-                moreOnDesktop <= 0 && 'sm:hidden',
-              )}
+              className="relative grid size-9 place-items-center rounded-full bg-surface text-xs font-semibold text-muted ring-2 ring-canvas transition tabular-nums hover:z-10 hover:scale-105 hover:text-ink"
             >
-              <span className="sm:hidden">+{moreOnMobile}</span>
-              <span className="hidden sm:inline">+{moreOnDesktop}</span>
+              +{more}
             </button>
           )}
         </div>
         <div className="hidden min-w-0 flex-1 sm:block">
-          <p className="truncate text-[11px] font-medium tracking-[0.18em] text-muted uppercase">Stream Calendar</p>
-          <p className="truncate text-sm font-semibold">
-            {channels.length > 1 ? `${channels.length} チャンネル` : (primary?.title ?? '読み込み中…')}
-          </p>
+          <p className="truncate text-[11px] font-medium tracking-[0.18em] text-muted uppercase">PROJECT NEBULA</p>
+          <p className="truncate text-sm font-semibold">Stream Calendar</p>
         </div>
 
         <div className="flex-1 sm:hidden" />
