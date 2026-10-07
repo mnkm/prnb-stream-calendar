@@ -3,10 +3,12 @@ import type { ReactNode } from 'react';
 import { format } from 'date-fns';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { type Channel, VIDEO_TYPES, type VideoType } from '../../shared/types';
+import type { ViewMode } from '../lib/calendar';
 import { TYPE_META } from '../lib/meta';
 
 interface Props {
   month: Date;
+  view: ViewMode;
   onPrev: () => void;
   onNext: () => void;
   onToday: () => void;
@@ -19,8 +21,11 @@ interface Props {
   onToggleChannel: (id: string) => void;
 }
 
+const UNIT_LABEL: Record<ViewMode, string> = { month: '月', week: '週', day: '日', list: '月' };
+
 export function Toolbar(props: Props) {
   const { month, channels } = props;
+  const unit = UNIT_LABEL[props.view];
 
   return (
     <div className="flex flex-col gap-5 py-6 sm:py-8 lg:flex-row lg:items-end lg:justify-between">
@@ -38,7 +43,7 @@ export function Toolbar(props: Props) {
           </h1>
         </div>
         <div className="mb-1 flex items-center gap-1">
-          <IconButton label="前の月" onClick={props.onPrev}>
+          <IconButton label={`前の${unit}`} onClick={props.onPrev}>
             <ChevronLeft className="size-4" />
           </IconButton>
           <button
@@ -47,7 +52,7 @@ export function Toolbar(props: Props) {
           >
             今日
           </button>
-          <IconButton label="次の月" onClick={props.onNext}>
+          <IconButton label={`次の${unit}`} onClick={props.onNext}>
             <ChevronRight className="size-4" />
           </IconButton>
           <span
