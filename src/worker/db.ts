@@ -13,6 +13,12 @@ export interface ChannelRow {
   backfill_stage: BackfillStage;
   backfill_page_token: string | null;
   backfilled_at: string | null;
+  description: string | null;
+  custom_url: string | null;
+  banner_url: string | null;
+  subscriber_count: number | null;
+  video_count: number | null;
+  profile_updated_at: string | null;
   premieres_page_token: string | null;
   premieres_scanned_at: string | null;
   members_page_token: string | null;
@@ -41,7 +47,17 @@ interface StoredVideoRow extends VideoRow {
 const placeholders = (n: number) => Array.from({ length: n }, () => '?').join(',');
 
 export function toChannel(row: ChannelRow): Channel {
-  return { id: row.id, title: row.title, iconUrl: row.icon_url, color: row.color };
+  return {
+    id: row.id,
+    title: row.title,
+    iconUrl: row.icon_url,
+    color: row.color,
+    description: row.description,
+    customUrl: row.custom_url,
+    bannerUrl: row.banner_url,
+    subscriberCount: row.subscriber_count,
+    videoCount: row.video_count,
+  };
 }
 
 function toEvent(row: StoredVideoRow): CalendarEvent {
@@ -69,8 +85,26 @@ export async function listEnabledChannels(db: D1Database): Promise<ChannelRow[]>
   return results;
 }
 
-export async function updateChannelProfile(db: D1Database, id: string, title: string, iconUrl: string | null) {
-  await db.prepare('UPDATE channels SET title = ?, icon_url = ? WHERE id = ?').bind(title, iconUrl, id).run();
+export interface ChannelProfile {
+  title: string;
+  iconUrl: string | null;
+  description: string | null;
+  customUrl: string | null;
+  bannerUrl: string | null;
+  subscriberCount: number | null;
+  videoCount: number | null;
+}
+
+export async function updateChannelProfile(db: D1Database, id: string, p: ChannelProfile, now: string) {
+  await db
+    .prepare(
+      `UPDATE channels
+          SET title = ?, icon_url = ?, description = ?, custom_url = ?, banner_url = ?,
+              subscriber_count = ?, video_count = ?, profile_updated_at = ?
+        WHERE id = ?`,
+    )
+    .bind(p.title, p.iconUrl, p.description, p.customUrl, p.bannerUrl, p.subscriberCount, p.videoCount, now, id)
+    .run();
 }
 
 export async function saveBackfillProgress(

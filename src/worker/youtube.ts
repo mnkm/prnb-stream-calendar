@@ -28,7 +28,14 @@ export interface YtVideo {
 
 export interface YtChannel {
   id: string;
-  snippet: { title: string; thumbnails: Partial<Record<'default' | 'medium' | 'high', YtThumbnail>> };
+  snippet: {
+    title: string;
+    description?: string;
+    customUrl?: string;
+    thumbnails: Partial<Record<'default' | 'medium' | 'high', YtThumbnail>>;
+  };
+  statistics?: { subscriberCount?: string; hiddenSubscriberCount?: boolean; videoCount?: string };
+  brandingSettings?: { image?: { bannerExternalUrl?: string } };
 }
 
 export interface PlaylistPage {
@@ -76,7 +83,10 @@ export class YouTubeClient {
 
   /** 1 unit */
   async getChannel(channelId: string): Promise<YtChannel | null> {
-    const data = await this.get<{ items?: YtChannel[] }>('channels', { part: 'snippet', id: channelId });
+    const data = await this.get<{ items?: YtChannel[] }>('channels', {
+      part: 'snippet,statistics,brandingSettings',
+      id: channelId,
+    });
     return data.items?.[0] ?? null;
   }
 

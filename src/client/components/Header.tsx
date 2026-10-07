@@ -32,27 +32,32 @@ interface Props {
   view: ViewMode;
   onViewChange: (view: ViewMode) => void;
   search: SearchProps;
+  /** チャンネルのアイコンを押したとき(プロフィールを開く) */
+  onSelectChannel: (channel: Channel) => void;
 }
 
-export function Header({ channels, view, onViewChange, search }: Props) {
+export function Header({ channels, view, onViewChange, search, onSelectChannel }: Props) {
   const primary = channels[0];
 
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-canvas/70 backdrop-blur-xl">
       <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3 sm:px-6">
         <div className="flex -space-x-2">
-          {channels.slice(0, 4).map((ch) =>
-            ch.iconUrl ? (
-              <img
-                key={ch.id}
-                src={ch.iconUrl}
-                alt=""
-                className="size-9 rounded-full object-cover ring-2 ring-canvas"
-              />
-            ) : (
-              <div key={ch.id} className="size-9 rounded-full ring-2 ring-canvas" style={{ background: ch.color }} />
-            ),
-          )}
+          {channels.slice(0, 4).map((ch) => (
+            <button
+              key={ch.id}
+              onClick={() => onSelectChannel(ch)}
+              aria-label={`${ch.title} のチャンネル情報`}
+              title={ch.title}
+              className="relative rounded-full transition hover:z-10 hover:scale-105 focus-visible:z-10"
+            >
+              {ch.iconUrl ? (
+                <img src={ch.iconUrl} alt="" className="size-9 rounded-full object-cover ring-2 ring-canvas" />
+              ) : (
+                <div className="size-9 rounded-full ring-2 ring-canvas" style={{ background: ch.color }} />
+              )}
+            </button>
+          ))}
         </div>
         <div className="hidden min-w-0 flex-1 sm:block">
           <p className="truncate text-[11px] font-medium tracking-[0.18em] text-muted uppercase">Stream Calendar</p>

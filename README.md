@@ -24,6 +24,7 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 | 種別フィルター | ライブ / 動画 / ショートの表示切り替え(表示中の期間の件数付き) |
 | キーワード検索 | タイトルを全期間から検索。全角・半角、大文字・小文字を区別しない。結果はリストで全件たどれる |
 | テーマ | 自動(OS の設定)/ ライト / ダーク をヘッダーのボタンで切り替え |
+| チャンネル情報 | ヘッダーのチャンネルアイコンを押すと、バナー・@ハンドル・登録者数・動画数・説明文(URL はリンク)を表示 |
 | 複数チャンネル | 2 チャンネル目を登録すると、チャンネルフィルターと色分けが自動で表示される |
 
 表示の状態は URL に残るので、そのまま共有できます。
@@ -56,7 +57,7 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 
 | メソッド・パス | 内容 |
 |---|---|
-| `GET /api/channels` | 有効なチャンネルの一覧(名前・アイコン・色) |
+| `GET /api/channels` | 有効なチャンネルの一覧(名前・アイコン・色・説明・登録者数など) |
 | `GET /api/events?from=&to=&channels=&types=` | 期間内の予定(最大 100 日分)。カレンダー表示に使う |
 | `GET /api/search?q=&types=&channels=&cursor=` | キーワード検索。50 件ずつ新しい順に返す(後述) |
 | `POST /api/admin/sync` | 手動同期。`Authorization: Bearer <ADMIN_TOKEN>` が必要 |
@@ -80,11 +81,11 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 
 ### `channels`
 
-同期対象のチャンネル。`color`(複数チャンネル時の識別色)、`enabled`、過去分の取得の進み具合(`backfill_stage` / `backfill_page_token`)、一度だけ行う補正の進み具合(`premieres_*` / `members_*`)を持ちます。
+同期対象のチャンネル。`color`(複数チャンネル時の識別色)、`enabled`、プロフィール(`description` / `custom_url` / `banner_url` / `subscriber_count` / `video_count`、1 日 1 回更新)、過去分の取得の進み具合(`backfill_stage` / `backfill_page_token`)、一度だけ行う補正の進み具合(`premieres_*` / `members_*`)を持ちます。
 
 ## 同期の仕組み
 
-Cron(15 分ごと)で、有効なチャンネルごとに次の処理を行います。
+Cron(15 分ごと)で、有効なチャンネルごとに次の処理を行います。あわせて、チャンネルのプロフィール(`channels.list` の snippet / statistics / brandingSettings)を 1 日 1 回取り直します(1 ユニット)。
 
 ### 1. 過去分の取得(チャンネル登録直後)
 
@@ -218,6 +219,7 @@ npm run deploy
 | `0003_premieres_scan.sql` | プレミア公開の補正の進み具合 |
 | `0004_members_only.sql` | メンバー限定の列と、取り込みの進み具合 |
 | `0005_search_title.sql` | 検索用に正規化したタイトルの列 |
+| `0006_channel_profile.sql` | チャンネルのプロフィール(説明・@ハンドル・バナー・登録者数・動画数) |
 
 ### チャンネルの追加
 

@@ -1,5 +1,6 @@
 import type { LiveStatus } from '../shared/types';
 import {
+  type ChannelProfile,
   type ChannelRow,
   type VideoRow,
   deleteVideos,
@@ -20,6 +21,7 @@ import {
 import { toIsoSeconds } from './time';
 import {
   SHORTS_MAX_DURATION_SEC,
+  type YtChannel,
   type YtVideo,
   YouTubeClient,
   fetchRssVideoIds,
@@ -39,6 +41,8 @@ import {
 const BACKFILL_PAGES_PER_RUN = 8;
 /** 1 回の実行で search_title を埋める件数 */
 const SEARCH_TITLE_FILL_PER_RUN = 1000;
+/** チャンネルのプロフィール(説明・登録者数など)を取り直す間隔 */
+const PROFILE_REFRESH_MS = 24 * 60 * 60 * 1000;
 
 export interface SyncEnv {
   DB: D1Database;
@@ -81,12 +85,36 @@ export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
   return results;
 }
 
+/** チャンネルのプロフィールを 1 日 1 回取り直す(1 unit)。名前とアイコンがまだ無いときはすぐ取る */
 async function ensureChannelProfile(db: D1Database, yt: YouTubeClient, channel: ChannelRow) {
-  if (channel.title && channel.icon_url) return;
-  const info = await yt.getChannel(channel.id);
-  if (!info) throw new Error(`channel not found: ${channel.id}`);
-  const icon = info.snippet.thumbnails.medium?.url ?? info.snippet.thumbnails.default?.url ?? null;
-  await updateChannelProfile(db, channel.id, info.snippet.title, icon);
+  const hasBasics = !!(channel.title && channel.icon_url);
+  const updatedAt = channel.profile_updated_at ? Date.parse(channel.profile_updated_at) : 0;
+  if (hasBasics && Date.now() - updatedAt < PROFILE_REFRESH_MS) return;
+  try {
+    const info = await yt.getChannel(channel.id);
+    if (!info) throw new Error(`channel not found: ${channel.id}`);
+    await updateChannelProfile(db, channel.id, toChannelProfile(info), nowIso());
+  } catch (err) {
+    // 名前とアイコンがあれば同期は続けられるので、プロフィールの更新失敗では止めない
+    if (!hasBasics) throw err;
+    console.warn(`profile refresh failed for ${channel.id}`, err);
+  }
+}
+
+function toChannelProfile(info: YtChannel): ChannelProfile {
+  const { snippet, statistics, brandingSettings } = info;
+  const banner = brandingSettings?.image?.bannerExternalUrl;
+  const count = (value?: string) => (value === undefined ? null : Number(value));
+  return {
+    title: snippet.title,
+    iconUrl: snippet.thumbnails.medium?.url ?? snippet.thumbnails.default?.url ?? null,
+    description: snippet.description?.trim() || null,
+    customUrl: snippet.customUrl ?? null,
+    // 元画像はテレビ用の大きなサイズなので、パソコン用の横長(約 6:1)に切り出したものを使う
+    bannerUrl: banner ? `${banner}=w1280-fcrop64=1,00005a57ffffa5a8-k-c0xffffffff-no-nd-rj` : null,
+    subscriberCount: statistics?.hiddenSubscriberCount ? null : count(statistics?.subscriberCount),
+    videoCount: count(statistics?.videoCount),
+  };
 }
 
 /** 過去分の取得。uploads を全件 → UUSH でショートを判定、の順に数回の Cron に分けて進める */
