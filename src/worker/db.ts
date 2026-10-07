@@ -1,5 +1,5 @@
 import { normalizeForSearch } from '../shared/search';
-import type { CalendarEvent, Channel, LiveStatus, SearchResult, VideoType } from '../shared/types';
+import type { CalendarEvent, Channel, LiveStatus, SearchPage, VideoType } from '../shared/types';
 
 export type BackfillStage = 'uploads' | 'shorts' | 'done';
 
@@ -248,23 +248,64 @@ export async function queryEvents(db: D1Database, q: EventQuery): Promise<Calend
 export interface SearchQuery {
   terms: string[];
   channelIds: string[];
+  types: VideoType[];
+  /** 前のページの nextCursor。最初のページなら null */
+  cursor: string | null;
   limit: number;
 }
 
-/** タイトルに全てのキーワード(splitSearchTerms で正規化済み)を含むものを、新しい順に返す */
-export async function searchEvents(db: D1Database, q: SearchQuery): Promise<SearchResult> {
+// ページの区切り。event_at は固定長の ISO 8601、動画 ID に ~ は含まれない
+const encodeCursor = (row: VideoRow) => `${row.event_at}~${row.id}`;
+function decodeCursor(cursor: string): { eventAt: string; id: string } | null {
+  const at = cursor.indexOf('~');
+  return at > 0 ? { eventAt: cursor.slice(0, at), id: cursor.slice(at + 1) } : null;
+}
+
+/**
+ * タイトルに全てのキーワード(splitSearchTerms で正規化済み)を含むものを、新しい順に 1 ページ分返す。
+ * 最初のページでは、種別ごとの件数(種別の絞り込み前)も数える
+ */
+export async function searchEvents(db: D1Database, q: SearchQuery): Promise<SearchPage> {
   // 入力した % と _ はワイルドカードではなく文字として扱う(エスケープ文字は !)
   const escapeLike = (s: string) => s.replace(/[!%_]/g, (c) => `!${c}`);
   // search_title がまだ空の行は、元のタイトルで探す
-  const where = q.terms.map(() => `COALESCE(search_title, title) LIKE '%' || ? || '%' ESCAPE '!'`);
-  const params: (string | number)[] = q.terms.map(escapeLike);
+  const match = q.terms.map(() => `COALESCE(search_title, title) LIKE '%' || ? || '%' ESCAPE '!'`);
+  const matchParams: string[] = q.terms.map(escapeLike);
   if (q.channelIds.length > 0) {
-    where.push(`channel_id IN (${placeholders(q.channelIds.length)})`);
-    params.push(...q.channelIds);
+    match.push(`channel_id IN (${placeholders(q.channelIds.length)})`);
+    matchParams.push(...q.channelIds);
   }
-  const { results } = await db
-    .prepare(`SELECT * FROM videos WHERE ${where.join(' AND ')} ORDER BY event_at DESC LIMIT ?`)
-    .bind(...params, q.limit + 1)
-    .all<StoredVideoRow>();
-  return { events: results.slice(0, q.limit).map(toEvent), hasMore: results.length > q.limit };
+
+  const where = [...match];
+  const params: (string | number)[] = [...matchParams];
+  if (q.types.length > 0) {
+    where.push(`type IN (${placeholders(q.types.length)})`);
+    params.push(...q.types);
+  }
+  const cursor = q.cursor ? decodeCursor(q.cursor) : null;
+  if (cursor) {
+    where.push('(event_at < ? OR (event_at = ? AND id < ?))');
+    params.push(cursor.eventAt, cursor.eventAt, cursor.id);
+  }
+
+  const pageStmt = db
+    .prepare(`SELECT * FROM videos WHERE ${where.join(' AND ')} ORDER BY event_at DESC, id DESC LIMIT ?`)
+    .bind(...params, q.limit + 1);
+  const countStmt = db
+    .prepare(`SELECT type, COUNT(*) AS n FROM videos WHERE ${match.join(' AND ')} GROUP BY type`)
+    .bind(...matchParams);
+
+  const [page, countRows] = await Promise.all([
+    pageStmt.all<StoredVideoRow>(),
+    q.cursor ? null : countStmt.all<{ type: VideoType; n: number }>(),
+  ]);
+
+  const rows = page.results.slice(0, q.limit);
+  const hasMore = page.results.length > q.limit;
+  let counts: Record<VideoType, number> | undefined;
+  if (countRows) {
+    counts = { live: 0, video: 0, short: 0 };
+    for (const { type, n } of countRows.results) counts[type] = n;
+  }
+  return { events: rows.map(toEvent), nextCursor: hasMore ? encodeCursor(rows[rows.length - 1]) : null, counts };
 }

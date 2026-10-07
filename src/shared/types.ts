@@ -26,8 +26,11 @@ export interface CalendarEvent {
   membersOnly: boolean;
 }
 
-export interface SearchResult {
+/** キーワード検索の 1 ページ分(新しい順) */
+export interface SearchPage {
   events: CalendarEvent[];
-  /** 上限を超えて一致したものがある(新しい順に上限まで返している) */
-  hasMore: boolean;
+  /** 次のページを取るときに cursor に渡す値。最後のページなら null */
+  nextCursor: string | null;
+  /** 種別ごとの一致件数(種別の絞り込み前)。最初のページだけに入る */
+  counts?: Record<VideoType, number>;
 }
