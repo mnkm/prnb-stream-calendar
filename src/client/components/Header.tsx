@@ -38,7 +38,7 @@ interface Props {
   onOpenChannelList: () => void;
 }
 
-// ヘッダーに並べるチャンネルアイコンの数。超えた分は「+N」にまとめる(スマホは横幅が足りないので 1 つ)
+// ヘッダーに並べるチャンネルアイコンの数。超えた分は「+N」にまとめる(768px 未満は横幅が足りないので 1 つ)
 const MOBILE_AVATARS = 1;
 const DESKTOP_AVATARS = 4;
 
@@ -59,7 +59,7 @@ export function Header({ channels, view, onViewChange, search, onSelectChannel, 
               title={ch.title}
               className={clsx(
                 'relative rounded-full transition hover:z-10 hover:scale-105 focus-visible:z-10',
-                i >= MOBILE_AVATARS && 'hidden sm:block',
+                i >= MOBILE_AVATARS && 'hidden md:block',
               )}
             >
               {ch.iconUrl ? (
@@ -76,16 +76,18 @@ export function Header({ channels, view, onViewChange, search, onSelectChannel, 
               title="チャンネル一覧"
               className={clsx(
                 'relative grid size-9 place-items-center rounded-full bg-surface text-xs font-semibold text-muted ring-2 ring-canvas transition tabular-nums hover:z-10 hover:scale-105 hover:text-ink',
-                moreOnDesktop <= 0 && 'sm:hidden',
+                moreOnDesktop <= 0 && 'md:hidden',
               )}
             >
-              <span className="sm:hidden">+{moreOnMobile}</span>
-              <span className="hidden sm:inline">+{moreOnDesktop}</span>
+              <span className="md:hidden">+{moreOnMobile}</span>
+              <span className="hidden md:inline">+{moreOnDesktop}</span>
             </button>
           )}
         </div>
         <div className="hidden min-w-0 flex-1 sm:block">
-          <p className="truncate text-[11px] font-medium tracking-[0.18em] text-muted uppercase">Stream Calendar</p>
+          <p className="truncate text-[11px] font-medium tracking-[0.08em] text-muted uppercase lg:tracking-[0.18em]">
+            PROJECT NEBULA Stream Calendar
+          </p>
           <p className="truncate text-sm font-semibold">
             {channels.length > 1 ? `${channels.length} チャンネル` : (primary?.title ?? '読み込み中…')}
           </p>
@@ -124,7 +126,7 @@ export function Header({ channels, view, onViewChange, search, onSelectChannel, 
                   transition={{ type: 'spring', bounce: 0.2, duration: 0.45 }}
                 />
               )}
-              <Icon className="relative hidden size-3.5 sm:block" aria-hidden />
+              <Icon className="relative hidden size-3.5 lg:block" aria-hidden />
               <span className="relative">{label}</span>
             </button>
           ))}

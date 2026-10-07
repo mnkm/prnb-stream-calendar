@@ -1,4 +1,4 @@
-# Stream Calendar
+# PROJECT NEBULA Stream Calendar
 
 YouTube チャンネルの **動画・ショート・ライブ配信** をカレンダーで表示する Web アプリ。
 Cloudflare Workers(静的アセット + Hono API)+ D1 + Cron Triggers で動作します。
