@@ -1,8 +1,10 @@
-import { format, isSameDay } from 'date-fns';
+import { format, isSameDay, roundToNearestMinutes } from 'date-fns';
 import { ja } from 'date-fns/locale';
 import type { CalendarEvent } from '../../shared/types';
 
-export const formatTime = (iso: string) => format(new Date(iso), 'HH:mm');
+/** 月表示・リスト表示用。配信は予定より数分遅れて始まることが多いので、5 分単位で切り捨てて見やすくする */
+export const formatTime = (iso: string) =>
+  format(roundToNearestMinutes(new Date(iso), { nearestTo: 5, roundingMethod: 'floor' }), 'HH:mm');
 
 export const formatDayHeading = (date: Date) => format(date, 'M月d日 (E)', { locale: ja });
 
