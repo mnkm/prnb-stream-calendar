@@ -1,8 +1,9 @@
 import clsx from 'clsx';
-import { Calendar1, CalendarDays, CalendarRange, List } from 'lucide-react';
+import { Calendar1, CalendarDays, CalendarRange, List, Monitor, Moon, Sun } from 'lucide-react';
 import { motion } from 'motion/react';
 import type { Channel } from '../../shared/types';
 import type { ViewMode } from '../lib/calendar';
+import { THEME_ORDER, type ThemePreference, useThemePreference } from '../lib/theme';
 
 const VIEW_OPTIONS: { value: ViewMode; label: string; icon: typeof List }[] = [
   { value: 'month', label: '月', icon: CalendarDays },
@@ -10,6 +11,12 @@ const VIEW_OPTIONS: { value: ViewMode; label: string; icon: typeof List }[] = [
   { value: 'day', label: '日', icon: Calendar1 },
   { value: 'list', label: 'リスト', icon: List },
 ];
+
+const THEME_META: Record<ThemePreference, { label: string; icon: typeof Sun }> = {
+  system: { label: '自動(OS の設定)', icon: Monitor },
+  light: { label: 'ライト', icon: Sun },
+  dark: { label: 'ダーク', icon: Moon },
+};
 
 interface Props {
   channels: Channel[];
@@ -44,6 +51,8 @@ export function Header({ channels, view, onViewChange }: Props) {
           </p>
         </div>
 
+        <ThemeToggle />
+
         <div role="tablist" aria-label="表示切替" className="flex rounded-full border border-line bg-surface/80 p-1">
           {VIEW_OPTIONS.map(({ value, label, icon: Icon }) => (
             <button
@@ -70,5 +79,22 @@ export function Header({ channels, view, onViewChange }: Props) {
         </div>
       </div>
     </header>
+  );
+}
+
+/** 押すたびに 自動 → ライト → ダーク の順に切り替える */
+function ThemeToggle() {
+  const [pref, setPref] = useThemePreference();
+  const { label, icon: Icon } = THEME_META[pref];
+  const next = THEME_ORDER[(THEME_ORDER.indexOf(pref) + 1) % THEME_ORDER.length];
+  return (
+    <button
+      onClick={() => setPref(next)}
+      aria-label={`テーマ: ${label}(押すと${THEME_META[next].label}に切り替え)`}
+      title={`テーマ: ${label}`}
+      className="grid size-9 shrink-0 place-items-center rounded-full border border-line bg-surface/80 text-muted transition hover:text-ink"
+    >
+      <Icon className="size-4" aria-hidden />
+    </button>
   );
 }

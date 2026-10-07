@@ -12,8 +12,9 @@
   color-scheme: light;
 }
 
+/* ダーク: OS がダークで、ライトを明示的に選んでいないとき */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --canvas: #0b0b0f;
     --surface: #141419;
     --raised: #1b1b21;
@@ -24,6 +25,19 @@
     --sat: #60a5fa;
     color-scheme: dark;
   }
+}
+
+/* ダーク: ヘッダーの切り替えでダークを選んだとき */
+:root[data-theme='dark'] {
+  --canvas: #0b0b0f;
+  --surface: #141419;
+  --raised: #1b1b21;
+  --ink: #f4f4f5;
+  --muted: #a1a1aa;
+  --line: rgb(255 255 255 / 0.08);
+  --sun: #fb7185;
+  --sat: #60a5fa;
+  color-scheme: dark;
 }
 
 @theme inline {
