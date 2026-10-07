@@ -78,7 +78,8 @@ export function TimeGridView({ days, events, channelMap, showChannelColor, onSel
         onTouchStart={markUserScrolled}
         onPointerDown={markUserScrolled}
         onKeyDown={markUserScrolled}
-        className="h-[min(70dvh,52rem)] overflow-y-auto overscroll-contain"
+        // 横方向のタッチ操作はスクロールに使わず、カレンダーのスワイプ(前後の週・日へ移動)に回す
+        className="h-[min(70dvh,52rem)] touch-pan-y overflow-y-auto overscroll-contain"
       >
         {/* 見出しはスクロール領域の中で固定し、スクロールバーの幅で列がずれないようにする */}
         <div className="sticky top-0 z-20 grid border-b border-line bg-surface/95 backdrop-blur" style={gridCols}>

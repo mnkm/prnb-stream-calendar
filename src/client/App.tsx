@@ -1,7 +1,7 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addMonths, format, startOfDay, startOfMonth } from 'date-fns';
-import { motion } from 'motion/react';
-import { useEffect, useMemo, useState } from 'react';
+import { type PanInfo, motion, useDragControls } from 'motion/react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { VIDEO_TYPES, type VideoType } from '../shared/types';
 import { EventDialog, type DialogState } from './components/EventDialog';
 import { Header } from './components/Header';
@@ -22,6 +22,10 @@ import {
 } from './lib/calendar';
 
 const LIVE_REFRESH_MS = 5 * 60_000;
+/** スワイプで前後に移動する距離(px)と速さ(px/秒)のしきい値 */
+const SWIPE_DISTANCE_PX = 80;
+const SWIPE_MIN_DISTANCE_PX = 30;
+const SWIPE_VELOCITY = 500;
 
 function initialDate() {
   return parseDateParam(new URLSearchParams(location.search)) ?? startOfDay(new Date());
@@ -107,6 +111,20 @@ export default function App() {
     setDirection(Math.sign(periodRange(view, target).start.getTime() - current.getTime()));
     setDate(target);
   };
+  // カレンダーを左右にスワイプして前後の月・週・日に移動する(タッチ操作のみ)
+  const dragControls = useDragControls();
+  const swiping = useRef(false);
+  const onSwipeEnd = (_: PointerEvent, { offset, velocity }: PanInfo) => {
+    // 指を離したときの click がカレンダー上の予定に届かないよう、イベント処理が終わってから戻す
+    setTimeout(() => {
+      swiping.current = false;
+    });
+    if (Math.abs(offset.x) < Math.abs(offset.y)) return;
+    const far = Math.abs(offset.x) > SWIPE_DISTANCE_PX;
+    const flick = Math.abs(offset.x) > SWIPE_MIN_DISTANCE_PX && Math.abs(velocity.x) > SWIPE_VELOCITY;
+    if (far || flick) shift(offset.x < 0 ? 1 : -1);
+  };
+
   const openDay = (day: Date) => {
     setDirection(0);
     setView('day');
@@ -145,6 +163,27 @@ export default function App() {
           initial={{ opacity: 0, x: direction * 24 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+          drag="x"
+          dragListener={false}
+          dragControls={dragControls}
+          dragDirectionLock
+          dragConstraints={{ left: 0, right: 0 }}
+          dragElastic={0.3}
+          dragSnapToOrigin
+          // 縦方向のスクロールはブラウザに任せる
+          style={{ touchAction: 'pan-y' }}
+          onPointerDown={(e) => {
+            if (e.pointerType === 'touch') dragControls.start(e);
+          }}
+          onDragStart={() => {
+            swiping.current = true;
+          }}
+          onDragEnd={onSwipeEnd}
+          onClickCapture={(e) => {
+            if (!swiping.current) return;
+            e.stopPropagation();
+            e.preventDefault();
+          }}
         >
           {view === 'week' || view === 'day' ? (
             <TimeGridView
