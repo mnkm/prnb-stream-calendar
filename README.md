@@ -14,7 +14,7 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 | パス | 内容 |
 |---|---|
 | `src/client/` | React + Tailwind CSS v4 + Motion のカレンダー UI |
-| `src/worker/index.ts` | API ルート (`/api/channels`, `/api/events`, `/api/admin/sync`) と Cron ハンドラ |
+| `src/worker/index.ts` | API ルート (`/api/channels`, `/api/events`, `/api/search`, `/api/admin/sync`) と Cron ハンドラ |
 | `src/worker/sync.ts` | 同期ロジック(過去分の段階取得 / 差分同期) |
 | `src/worker/youtube.ts` | YouTube Data API クライアント、RSS、ショート判定 |
 | `src/worker/db.ts` | D1 アクセス |

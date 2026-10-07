@@ -1,4 +1,4 @@
-import type { CalendarEvent, Channel, LiveStatus, VideoType } from '../shared/types';
+import type { CalendarEvent, Channel, LiveStatus, SearchResult, VideoType } from '../shared/types';
 
 export type BackfillStage = 'uploads' | 'shorts' | 'done';
 
@@ -222,4 +222,27 @@ export async function queryEvents(db: D1Database, q: EventQuery): Promise<Calend
     .bind(...params)
     .all<StoredVideoRow>();
   return results.map(toEvent);
+}
+
+export interface SearchQuery {
+  terms: string[];
+  channelIds: string[];
+  limit: number;
+}
+
+/** タイトルに全てのキーワードを含むものを、新しい順に返す */
+export async function searchEvents(db: D1Database, q: SearchQuery): Promise<SearchResult> {
+  // 入力した % と _ はワイルドカードではなく文字として扱う(エスケープ文字は !)
+  const escapeLike = (s: string) => s.replace(/[!%_]/g, (c) => `!${c}`);
+  const where = q.terms.map(() => `title LIKE '%' || ? || '%' ESCAPE '!'`);
+  const params: (string | number)[] = q.terms.map(escapeLike);
+  if (q.channelIds.length > 0) {
+    where.push(`channel_id IN (${placeholders(q.channelIds.length)})`);
+    params.push(...q.channelIds);
+  }
+  const { results } = await db
+    .prepare(`SELECT * FROM videos WHERE ${where.join(' AND ')} ORDER BY event_at DESC LIMIT ?`)
+    .bind(...params, q.limit + 1)
+    .all<StoredVideoRow>();
+  return { events: results.slice(0, q.limit).map(toEvent), hasMore: results.length > q.limit };
 }

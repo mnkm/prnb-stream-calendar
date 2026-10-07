@@ -1,6 +1,7 @@
 import clsx from 'clsx';
 import type { CalendarEvent } from '../../shared/types';
 import { formatDuration, formatTime } from '../lib/format';
+import { Highlight } from './Highlight';
 import { LiveStatusBadge, MembersOnlyBadge, TypeBadge } from './Badges';
 import { Thumbnail } from './Thumbnail';
 
@@ -8,10 +9,13 @@ import { Thumbnail } from './Thumbnail';
 export function EventRow({
   event,
   channelColor,
+  highlight,
   onClick,
 }: {
   event: CalendarEvent;
   channelColor?: string;
+  /** 検索結果で強調する語 */
+  highlight?: string[];
   onClick: () => void;
 }) {
   const duration = formatDuration(event.durationSec);
@@ -40,7 +44,9 @@ export function EventRow({
           <MembersOnlyBadge event={event} />
           {channelColor && <span className="size-2 rounded-full" style={{ background: channelColor }} />}
         </div>
-        <p className="line-clamp-2 text-sm leading-snug font-medium text-ink/90 group-hover:text-ink">{event.title}</p>
+        <p className="line-clamp-2 text-sm leading-snug font-medium text-ink/90 group-hover:text-ink">
+          <Highlight text={event.title} terms={highlight} />
+        </p>
       </div>
     </button>
   );
