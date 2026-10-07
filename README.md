@@ -240,7 +240,7 @@ npx wrangler d1 execute prnb-youtube-calendar --remote \
   --command "INSERT INTO channels (id, color, sort_order) VALUES ('UCxxxxxxxxxxxxxxxxxxxxxx', '#f472b6', 1)"
 ```
 
-2 チャンネル以上になると、画面にチャンネルフィルターと色分けが自動で表示されます。`sort_order` が画面での並び順です。
+2 チャンネル以上になると、画面にチャンネルフィルターと色分けが自動で表示されます。`sort_order` が画面での並び順です。 `color` には CSS の色をそのまま書けます。`var(--ink)` を指定すると、ライトテーマでは黒、ダークテーマでは白になります。
 
 チャンネルを増やすと、各チャンネルの同期の間隔が延びます(無料プランでは「チャンネル数 ÷ 2 × 5 分」ごと)。また、YouTube API の 1 日の上限(10,000 ユニット)にも近づくので、10 チャンネルを超える場合は Workers Paid プランへの切り替えを検討してください。
 
