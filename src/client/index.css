@@ -44,6 +44,8 @@
   --color-live: oklch(0.645 0.215 16);
   --color-video: oklch(0.585 0.2 277);
   --color-short: oklch(0.72 0.17 55);
+  /* メンバー限定 */
+  --color-member: oklch(0.62 0.15 160);
 }
 
 body {

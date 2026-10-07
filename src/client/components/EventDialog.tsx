@@ -1,9 +1,9 @@
-import { ArrowLeft, Clock, ExternalLink, Play, Timer, X } from 'lucide-react';
+import { ArrowLeft, Clock, Crown, ExternalLink, Play, Timer, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useState } from 'react';
 import type { CalendarEvent, Channel } from '../../shared/types';
 import { formatDayHeading, formatDuration, formatEventWhen, watchUrl } from '../lib/format';
-import { LiveStatusBadge, TypeBadge } from './Badges';
+import { LiveStatusBadge, MembersOnlyBadge, TypeBadge } from './Badges';
 import { EventRow } from './EventRow';
 import { Thumbnail } from './Thumbnail';
 
@@ -98,7 +98,16 @@ function EventDetail({ event, onBack }: { event: CalendarEvent; onBack?: () => v
   return (
     <div>
       <div className="relative aspect-video bg-black">
-        {playing ? (
+        {event.membersOnly ? (
+          // メンバー以外は埋め込み再生できないので、サムネイルだけ表示して YouTube に誘導する
+          <div className="size-full">
+            <Thumbnail event={event} hd className="size-full" />
+            <span className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/70 to-transparent px-4 pt-8 pb-3 text-xs font-medium text-white">
+              <Crown className="size-3.5" aria-hidden />
+              メンバー限定のため、YouTube で視聴してください
+            </span>
+          </div>
+        ) : playing ? (
           <iframe
             className="size-full"
             src={`https://www.youtube-nocookie.com/embed/${event.id}?autoplay=1`}
@@ -122,6 +131,7 @@ function EventDetail({ event, onBack }: { event: CalendarEvent; onBack?: () => v
         <div className="flex flex-wrap items-center gap-1.5">
           <TypeBadge event={event} />
           <LiveStatusBadge event={event} />
+          <MembersOnlyBadge event={event} />
         </div>
         <h2 className="text-lg leading-snug font-semibold">{event.title}</h2>
         <dl className="grid gap-2 text-sm text-muted">

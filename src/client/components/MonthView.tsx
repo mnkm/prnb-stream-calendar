@@ -1,5 +1,6 @@
 import clsx from 'clsx';
 import { format, getDay, isSameMonth, isToday } from 'date-fns';
+import { Crown } from 'lucide-react';
 import type { CalendarEvent, Channel } from '../../shared/types';
 import { WEEKDAY_LABELS, dayKey } from '../lib/calendar';
 import { formatDayHeading, formatTime } from '../lib/format';
@@ -125,6 +126,7 @@ function EventChip({
     >
       {event.liveStatus === 'live' ? <LiveDot /> : <Icon className="size-3 shrink-0" aria-hidden />}
       <span className="shrink-0 tabular-nums opacity-75">{formatTime(event.eventAt)}</span>
+      {event.membersOnly && <Crown className="size-3 shrink-0 text-member" aria-label="メンバー限定" />}
       <span className="truncate font-medium text-ink/85">{event.title}</span>
     </button>
   );
