@@ -73,8 +73,11 @@ export function Header({ channels, view, onViewChange, search, onSelectChannel, 
           )}
         </div>
         <div className="hidden min-w-0 flex-1 sm:block">
-          <p className="truncate text-[11px] font-medium tracking-[0.18em] text-muted uppercase">PROJECT NEBULA</p>
-          <p className="truncate text-sm font-semibold">Stream Calendar</p>
+          {['PROJECT NEBULA', 'Stream Calendar'].map((line) => (
+            <p key={line} className="truncate text-[11px] font-medium tracking-[0.18em] text-muted uppercase">
+              {line}
+            </p>
+          ))}
         </div>
 
         <div className="flex-1 sm:hidden" />
