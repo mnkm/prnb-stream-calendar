@@ -1,20 +1,35 @@
+import clsx from 'clsx';
 import { ArrowLeft, ChevronRight, ExternalLink } from 'lucide-react';
-import type { Channel } from '../../shared/types';
+import { useState } from 'react';
+import type { CalendarEvent, Channel } from '../../shared/types';
 import { Modal } from './Modal';
+import { PlaylistDetailView, PlaylistGrid } from './Playlists';
 
 const compactNumber = new Intl.NumberFormat('ja-JP', { notation: 'compact', maximumFractionDigits: 1 });
 
-/** list = チャンネル一覧、channel = 1 チャンネルのプロフィール(一覧から開いたときは戻れる) */
-export type ChannelDialogState = { kind: 'list' } | { kind: 'channel'; channel: Channel; fromList?: boolean };
+type ChannelState = { kind: 'channel'; channel: Channel; fromList?: boolean };
+
+/**
+ * list = チャンネル一覧、channel = 1 チャンネルのプロフィール(一覧から開いたときは戻れる)、
+ * playlist = 再生リストの中身(戻り先はチャンネル、または開いていた動画の詳細)
+ */
+export type ChannelDialogState =
+  | { kind: 'list' }
+  | ChannelState
+  | { kind: 'playlist'; playlistId: string; back: ChannelState | { kind: 'event'; event: CalendarEvent } };
 
 interface Props {
   state: ChannelDialogState | null;
   channels: Channel[];
   onChange: (state: ChannelDialogState | null) => void;
+  /** 再生リストの中の動画を押したとき(動画の詳細を開く。そこから再生リストに戻れるよう、今の状態も渡す) */
+  onOpenEvent: (event: CalendarEvent, returnTo: ChannelDialogState) => void;
+  /** 動画の詳細から開いた再生リストで「戻る」を押したとき */
+  onReturnToEvent: (event: CalendarEvent) => void;
 }
 
-/** ヘッダーのチャンネルアイコン(または「+N」)から開く、チャンネルの一覧とプロフィール */
-export function ChannelDialog({ state, channels, onChange }: Props) {
+/** ヘッダーの YouTube ボタンから開く、チャンネルの一覧・プロフィール・再生リスト */
+export function ChannelDialog({ state, channels, onChange, onOpenEvent, onReturnToEvent }: Props) {
   return (
     <Modal open={state !== null} onClose={() => onChange(null)}>
       {state?.kind === 'list' ? (
@@ -24,6 +39,15 @@ export function ChannelDialog({ state, channels, onChange }: Props) {
           key={state.channel.id}
           channel={state.channel}
           onBack={state.fromList ? () => onChange({ kind: 'list' }) : undefined}
+          onOpenPlaylist={(p) => onChange({ kind: 'playlist', playlistId: p.id, back: state })}
+        />
+      ) : state?.kind === 'playlist' ? (
+        <PlaylistDetailView
+          key={state.playlistId}
+          playlistId={state.playlistId}
+          backLabel={state.back.kind === 'channel' ? state.back.channel.title : '動画に戻る'}
+          onBack={() => (state.back.kind === 'event' ? onReturnToEvent(state.back.event) : onChange(state.back))}
+          onOpenEvent={(event) => onOpenEvent(event, state)}
         />
       ) : null}
     </Modal>
@@ -60,7 +84,17 @@ function ChannelList({ channels, onSelect }: { channels: Channel[]; onSelect: (c
   );
 }
 
-function ChannelProfile({ channel, onBack }: { channel: Channel; onBack?: () => void }) {
+function ChannelProfile({
+  channel,
+  onBack,
+  onOpenPlaylist,
+}: {
+  channel: Channel;
+  onBack?: () => void;
+  onOpenPlaylist: (playlist: { id: string }) => void;
+}) {
+  // 再生リストを先に見せる(説明文などは「チャンネル情報」タブ)
+  const [tab, setTab] = useState<'playlists' | 'about'>('playlists');
   const channelUrl = channel.customUrl
     ? `https://www.youtube.com/${channel.customUrl}`
     : `https://www.youtube.com/channel/${channel.id}`;
@@ -98,7 +132,31 @@ function ChannelProfile({ channel, onBack }: { channel: Channel; onBack?: () => 
           </p>
         </div>
 
-        {channel.description ? (
+        <div role="tablist" aria-label="チャンネルの表示" className="flex gap-1 border-b border-line">
+          {(
+            [
+              ['playlists', '再生リスト'],
+              ['about', 'チャンネル情報'],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              role="tab"
+              aria-selected={tab === value}
+              onClick={() => setTab(value)}
+              className={clsx(
+                '-mb-px border-b-2 px-3 py-2 text-sm font-semibold transition',
+                tab === value ? 'border-ink text-ink' : 'border-transparent text-muted hover:text-ink',
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {tab === 'playlists' ? (
+          <PlaylistGrid channelId={channel.id} onOpen={onOpenPlaylist} />
+        ) : channel.description ? (
           <p className="text-sm leading-relaxed break-words whitespace-pre-line text-ink/85">
             <Linkify text={channel.description} />
           </p>

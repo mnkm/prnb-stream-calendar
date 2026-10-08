@@ -1,5 +1,15 @@
 import { normalizeForSearch } from '../shared/search';
-import type { CalendarEvent, Channel, LiveStatus, SearchPage, Setlist, VideoType } from '../shared/types';
+import { isRecommendedPlaylist } from '../shared/playlist';
+import type {
+  CalendarEvent,
+  Channel,
+  LiveStatus,
+  Playlist,
+  PlaylistDetail,
+  SearchPage,
+  Setlist,
+  VideoType,
+} from '../shared/types';
 
 export type BackfillStage = 'uploads' | 'shorts' | 'done';
 
@@ -19,6 +29,7 @@ export interface ChannelRow {
   subscriber_count: number | null;
   video_count: number | null;
   profile_updated_at: string | null;
+  playlists_synced_at: string | null;
   premieres_page_token: string | null;
   premieres_scanned_at: string | null;
   members_page_token: string | null;
@@ -390,4 +401,144 @@ export async function getSetlist(db: D1Database, videoId: string): Promise<Setli
     .bind(videoId)
     .first<{ author: string; text: string }>();
   return row ? { author: row.author, text: row.text } : null;
+}
+
+// ---------- 再生リスト ----------
+
+interface PlaylistRow {
+  id: string;
+  channel_id: string;
+  title: string;
+  thumbnail_url: string | null;
+  item_count: number;
+}
+
+const toPlaylist = (row: PlaylistRow): Playlist => ({
+  id: row.id,
+  channelId: row.channel_id,
+  title: row.title,
+  thumbnailUrl: row.thumbnail_url,
+  itemCount: row.item_count,
+  recommended: isRecommendedPlaylist(row.title),
+});
+
+/** おすすめを先頭に、残りは最後に動画が追加された順 */
+const sortPlaylists = (lists: (Playlist & { lastAddedAt: string | null })[]) =>
+  lists
+    .sort(
+      (a, b) =>
+        Number(b.recommended) - Number(a.recommended) || (b.lastAddedAt ?? '').localeCompare(a.lastAddedAt ?? ''),
+    )
+    .map(({ lastAddedAt: _, ...p }) => p);
+
+export async function listChannelPlaylists(db: D1Database, channelId: string): Promise<Playlist[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM playlists WHERE channel_id = ? AND item_count > 0')
+    .bind(channelId)
+    .all<PlaylistRow & { last_added_at: string | null; published_at: string | null }>();
+  return sortPlaylists(results.map((r) => ({ ...toPlaylist(r), lastAddedAt: r.last_added_at ?? r.published_at })));
+}
+
+export async function getPlaylistDetail(db: D1Database, playlistId: string): Promise<PlaylistDetail | null> {
+  const [playlist, videos] = await Promise.all([
+    db.prepare('SELECT * FROM playlists WHERE id = ?').bind(playlistId).first<PlaylistRow>(),
+    db
+      .prepare(
+        `SELECT v.* FROM playlist_items i JOIN videos v ON v.id = i.video_id
+          WHERE i.playlist_id = ? ORDER BY i.position`,
+      )
+      .bind(playlistId)
+      .all<StoredVideoRow>(),
+  ]);
+  return playlist ? { playlist: toPlaylist(playlist), events: videos.results.map(toEvent) } : null;
+}
+
+/** 動画が入っている再生リスト */
+export async function listVideoPlaylists(db: D1Database, videoId: string): Promise<Playlist[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.* FROM playlist_items i JOIN playlists p ON p.id = i.playlist_id
+        WHERE i.video_id = ?`,
+    )
+    .bind(videoId)
+    .all<PlaylistRow & { last_added_at: string | null; published_at: string | null }>();
+  return sortPlaylists(results.map((r) => ({ ...toPlaylist(r), lastAddedAt: r.last_added_at ?? r.published_at })));
+}
+
+export async function listPlaylistIds(db: D1Database, channelId: string): Promise<string[]> {
+  const { results } = await db.prepare('SELECT id FROM playlists WHERE channel_id = ?').bind(channelId).all<{ id: string }>();
+  return results.map((r) => r.id);
+}
+
+/**
+ * 再生リストを保存する。本数が変わったものだけ、中身を読み直す(items_synced_at を NULL にする)
+ */
+export function upsertPlaylistStmt(
+  db: D1Database,
+  channelId: string,
+  p: { id: string; title: string; thumbnailUrl: string | null; itemCount: number; publishedAt: string },
+  now: string,
+) {
+  return db
+    .prepare(
+      `INSERT INTO playlists (id, channel_id, title, thumbnail_url, item_count, published_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (id) DO UPDATE SET
+         title = excluded.title,
+         thumbnail_url = excluded.thumbnail_url,
+         published_at = excluded.published_at,
+         updated_at = excluded.updated_at,
+         items_synced_at  = CASE WHEN playlists.item_count = excluded.item_count THEN playlists.items_synced_at ELSE NULL END,
+         items_page_token = CASE WHEN playlists.item_count = excluded.item_count THEN playlists.items_page_token ELSE NULL END,
+         item_count = excluded.item_count`,
+    )
+    .bind(p.id, channelId, p.title, p.thumbnailUrl, p.itemCount, p.publishedAt, now);
+}
+
+export function deletePlaylistsStmt(db: D1Database, ids: string[]) {
+  if (ids.length === 0) return null;
+  return db.prepare(`DELETE FROM playlists WHERE id IN (${placeholders(ids.length)})`).bind(...ids);
+}
+
+export function markPlaylistsSyncedStmt(db: D1Database, channelId: string, now: string) {
+  return db.prepare('UPDATE channels SET playlists_synced_at = ? WHERE id = ?').bind(now, channelId);
+}
+
+/** 中身を読む必要がある再生リスト(1 件) */
+export async function findPendingPlaylist(db: D1Database) {
+  return db
+    .prepare('SELECT id, items_page_token FROM playlists WHERE items_synced_at IS NULL ORDER BY channel_id, id LIMIT 1')
+    .first<{ id: string; items_page_token: string | null }>();
+}
+
+/**
+ * 再生リストの中身の 1 ページ分を書き込む文。最初のページでは古い中身を消し、最後のページでは読み終わった印を付ける
+ */
+export function playlistItemsPageStmts(
+  db: D1Database,
+  playlistId: string,
+  page: { items: { videoId: string; position: number; addedAt: string }[]; nextPageToken?: string } | null,
+  firstPage: boolean,
+  now: string,
+): D1PreparedStatement[] {
+  const stmts: D1PreparedStatement[] = [];
+  if (firstPage) stmts.push(db.prepare('DELETE FROM playlist_items WHERE playlist_id = ?').bind(playlistId));
+  const insert = db.prepare(
+    'INSERT OR REPLACE INTO playlist_items (playlist_id, video_id, position, added_at) VALUES (?, ?, ?, ?)',
+  );
+  for (const i of page?.items ?? []) stmts.push(insert.bind(playlistId, i.videoId, i.position, i.addedAt));
+  if (page?.nextPageToken) {
+    stmts.push(db.prepare('UPDATE playlists SET items_page_token = ? WHERE id = ?').bind(page.nextPageToken, playlistId));
+  } else {
+    stmts.push(
+      db
+        .prepare(
+          `UPDATE playlists SET items_page_token = NULL, items_synced_at = ?,
+             last_added_at = (SELECT MAX(added_at) FROM playlist_items WHERE playlist_id = ?)
+           WHERE id = ?`,
+        )
+        .bind(now, playlistId, playlistId),
+    );
+  }
+  return stmts;
 }

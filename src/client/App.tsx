@@ -300,8 +300,33 @@ export default function App() {
         )}
       </main>
 
-      <EventDialog state={dialog} channelMap={channelMap} showChannelColor={showChannelColor} onChange={setDialog} />
-      <ChannelDialog state={channelDialog} channels={channels} onChange={setChannelDialog} />
+      <EventDialog
+        state={dialog}
+        channelMap={channelMap}
+        showChannelColor={showChannelColor}
+        onChange={setDialog}
+        onOpenPlaylist={(playlist, from) => {
+          setDialog(null);
+          setChannelDialog({ kind: 'playlist', playlistId: playlist.id, back: { kind: 'event', event: from } });
+        }}
+        onBackToPlaylist={(state) => {
+          setDialog(null);
+          setChannelDialog(state);
+        }}
+      />
+      <ChannelDialog
+        state={channelDialog}
+        channels={channels}
+        onChange={setChannelDialog}
+        onOpenEvent={(event, returnTo) => {
+          setChannelDialog(null);
+          setDialog({ kind: 'event', event, playlist: returnTo });
+        }}
+        onReturnToEvent={(event) => {
+          setChannelDialog(null);
+          setDialog({ kind: 'event', event });
+        }}
+      />
     </div>
   );
 }

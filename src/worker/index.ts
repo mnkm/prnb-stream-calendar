@@ -1,7 +1,16 @@
 import { Hono } from 'hono';
 import { splitSearchTerms } from '../shared/search';
 import { VIDEO_TYPES, type VideoType } from '../shared/types';
-import { getSetlist, listEnabledChannels, queryEvents, searchEvents, toChannel } from './db';
+import {
+  getPlaylistDetail,
+  getSetlist,
+  listChannelPlaylists,
+  listEnabledChannels,
+  listVideoPlaylists,
+  queryEvents,
+  searchEvents,
+  toChannel,
+} from './db';
 import { syncAll } from './sync';
 import { toIsoSeconds } from './time';
 
@@ -71,6 +80,26 @@ app.get('/setlist/:id', async (c) => {
   if (!setlist) return c.json({ error: 'not found' }, 404);
   c.header('Cache-Control', 'public, max-age=300');
   return c.json(setlist);
+});
+
+/** チャンネルの再生リスト(おすすめを先頭に、残りは最後に動画が追加された順) */
+app.get('/channels/:id/playlists', async (c) => {
+  c.header('Cache-Control', 'public, max-age=300');
+  return c.json(await listChannelPlaylists(c.env.DB, c.req.param('id')));
+});
+
+/** 再生リストの中身(このカレンダーに登録済みの動画だけ、再生リストの並び順) */
+app.get('/playlists/:id', async (c) => {
+  const detail = await getPlaylistDetail(c.env.DB, c.req.param('id'));
+  if (!detail) return c.json({ error: 'not found' }, 404);
+  c.header('Cache-Control', 'public, max-age=300');
+  return c.json(detail);
+});
+
+/** 動画が入っている再生リスト */
+app.get('/videos/:id/playlists', async (c) => {
+  c.header('Cache-Control', 'public, max-age=300');
+  return c.json(await listVideoPlaylists(c.env.DB, c.req.param('id')));
 });
 
 /** 手動同期(初回の取り込みや動作確認用)。Authorization: Bearer <ADMIN_TOKEN> */
