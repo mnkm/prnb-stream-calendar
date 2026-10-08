@@ -5,16 +5,22 @@
  *   00:09:46 🎶01. ケセラセラ／Mrs. GREEN APPLE
  *   0:20:33 【01】I wanna see you/阿部真央
  *   M01  00:08:23  /  00:09:18  ～  00:14:44  /  楓  -  スピッツ,  ピアノ伴奏   (曲紹介・開始・終了)
+ *   No.01  /  00:12:37  ～  00:16:16  /  いかないで  -  想太
  *   0:06:04　01．プライド革命／CHiCO with HoneyWorks【銀魂゜】（2015/08/05）
  *   01:20:58 怪獣の花唄                                                    (次の行に続く)
  *   (Kaijuu no Hanauta) - Vaundy
+ *   ▶05:52〜10:48                                                          (時刻と曲が別の行)
+ *   🎵1.ミラクル  /miwa
+ *   00:01:55 あの夏に咲け                                                   (「セトリ」の見出しの下に曲名だけ)
+ *   13:40 welcome to my fanclub's night(歌)                                 (「(歌)」の印)
  *
- * 曲だけを取り出し、開始・告知・キリバンなど曲以外の時刻や、補足(伴奏・作品名・発売日)は捨てる。
+ * 曲だけを取り出し、開始・告知・キリバンなど曲以外の時刻や、補足(伴奏・作品名・発売日・リクエストした人)は捨てる。
+ * セトリと目次(雑談も含む全体のタイムスタンプ)の両方に同じ曲がある場合は、最初の 1 回だけにする。
  * 読み取りは表示するときに行うので、規則を直しても YouTube からコメントを取り直す必要はない。
  */
 
 export interface SetlistSong {
-  /** セトリに書かれた番号。書かれていなければ 1 から順に振る */
+  /** セトリに書かれた番号。書かれていない・番号が飛んだり重なったりしているときは 1 から振り直す */
   no: number;
   title: string;
   artist: string | null;
@@ -26,12 +32,20 @@ const TIME_SOURCE = String.raw`(?<![\d:])(\d{1,2}):(\d{2})(?::(\d{2}))?(?![\d:])
 const TIME_GLOBAL = new RegExp(TIME_SOURCE, 'g');
 const TIME_ONCE = new RegExp(TIME_SOURCE);
 
-/** 曲番号: 「01.」「01．」「【01】」「No.1」 */
-const NUMBER = /^(?:No\.?\s*)?(\d{1,3})\s*[.．:：)）]\s*|^【(\d{1,3})】\s*/i;
+/** 曲番号: 「No.16 」「No.01 /」「01.」「01．」「【01】」 */
+const NUMBER = /^No\.?\s*(\d{1,3})(?:\s*[.．:：)）/／]\s*|\s+)|^(\d{1,3})\s*[.．:：)）]\s*|^【(\d{1,3})】\s*/i;
 /** 曲名とアーティストの区切り。コメントの中で多く使われているものから試す */
-const SEPARATORS = [/／/, /\s+\/\s*/, /\//, /\s+[-–—]\s*/];
-/** セトリにアーティストが書かれていないときに補う曲(オリジナル曲など) */
-const KNOWN_ARTISTS: Record<string, string> = { 'Swing Days!': '碓氷ゆら' };
+const SEPARATORS = [/／/g, /\s+\/\s*/g, /\//g, /\s+[-‐‑–—―]\s*/g];
+/** 曲名の前後に付く記号(行頭の区切り・矢印・絵文字など) */
+const LEADING = /^(?:[\s　]|[/／～~\-‐)）▶►・=＝]|[\p{Extended_Pictographic}‍️♪♫])+/u;
+/** 曲以外の時刻なのに「曲名/英語」の形で書かれやすいもの */
+const NOT_SONG = /^(?:配信開始|配信終了|開始|終了|告知|宣伝|告知・宣伝|エンディング|オープニング|OP|ED|自己紹介|乾杯|休憩)$/i;
+/** セトリの見出し(曲名だけのセトリを読むときの目印)。文中の「セトリ」ではなく、行の先頭にあるものだけ */
+const SETLIST_HEADING = /^[^\p{L}\p{N}]*(?:セトリ|セットリスト|set\s*list|songs?\s*list)/iu;
+/** 曲名だけのセトリで除く挨拶(「こんにな～」「おつひな」「せーの!」など) */
+const GREETING = /^(?:こん|おつ|おは|せーの|ばいばい)/;
+/** セトリにアーティストが書かれていないときに補う曲(オリジナル曲など)。曲名は大文字・小文字を区別しない */
+const KNOWN_ARTISTS: Record<string, string> = { 'swing days!': '碓氷ゆら' };
 
 /** コメントに含まれるタイムスタンプの数(セトリのコメントを見分けるのに使う) */
 export const countTimestamps = (text: string) => text.match(TIME_GLOBAL)?.length ?? 0;
@@ -39,95 +53,210 @@ export const countTimestamps = (text: string) => text.match(TIME_GLOBAL)?.length
 const toSeconds = (h: string, m: string, s?: string) =>
   s === undefined ? Number(h) * 60 + Number(m) : Number(h) * 3600 + Number(m) * 60 + Number(s);
 
+const knownArtist = (title: string) => KNOWN_ARTISTS[title.toLowerCase()] ?? null;
+
+/** 曲名とアーティストに分ける。「3/30」「12／28」のように数字にはさまれた区切りは日付なので使わない */
 function splitTitleArtist(text: string, separators: RegExp[]) {
   for (const sep of separators) {
-    const m = text.match(sep);
-    if (m?.index && m.index + m[0].length < text.length) {
-      return { title: text.slice(0, m.index).trim(), artist: text.slice(m.index + m[0].length).trim() };
+    for (const m of text.matchAll(sep)) {
+      const at = m.index ?? 0;
+      const end = at + m[0].length;
+      if (at === 0 || end >= text.length) continue;
+      if (/\d/.test(text[at - 1]) && /\d/.test(text[end])) continue;
+      return { title: text.slice(0, at).trim(), artist: text.slice(end).trim() };
     }
   }
   return null;
 }
 
+/** 行頭の記号と曲番号を外す */
+function stripLead(text: string): { no: number | null; rest: string } {
+  let rest = text.replace(LEADING, '');
+  const n = rest.match(NUMBER);
+  if (!n) return { no: null, rest };
+  rest = rest.slice(n[0].length).replace(LEADING, '');
+  return { no: Number(n[1] ?? n[2] ?? n[3]), rest };
+}
+
+/** 補足(リクエストした人・発売日・作品名)を外す */
+function stripNotes(text: string) {
+  let t = text.replace(/\s*[@＠]\S+\s*さん\s*$/u, '').trim();
+  const date = /[（(]\d{4}[/／.]\d{1,2}[/／.]\d{1,2}[)）]\s*$/;
+  if (date.test(t)) {
+    t = t.replace(date, '').trim();
+    t = t.replace(/（[^（）]+）\s*$/, '').trim(); // 発売日の前の(作品名)
+  }
+  return t.replace(/【[^】]+】\s*$/, '').trim();
+}
+
+/** 演奏の補足(「(少しアカペラ)」「（アルペジオverを少し）」など)。アーティストの補足(「(sana×CHiCO)」)は残す */
+const PERFORMANCE_NOTE =
+  /\s*[（(][^（）()]*(?:アカペラ|アルペジオ|少し|ちょっと|ショート|(?<![a-z])short|(?<![a-z])ver|サビ|1番|一番|フル|試験|リベンジ|途中|練習)[^（）()]*[)）]\s*$/i;
+/** 末尾の絵文字(「米津玄師🆕」) */
+const TRAILING_EMOJI = /[\s\p{Emoji_Presentation}‍️]+$/u;
+
+const cleanTail = (s: string) => s.replace(TRAILING_EMOJI, '').replace(PERFORMANCE_NOTE, '').replace(TRAILING_EMOJI, '').trim();
+
 /** 時刻のあとの文字列を曲として読む。曲名とアーティストの形になっていなければ null(曲以外) */
 function readSong(rest: string, separators: RegExp[]): { title: string; artist: string | null } | null {
-  const text = rest
-    .replace(/[（(]\d{4}\/\d{1,2}\/\d{1,2}[)）]\s*$/, '') // 発売日
-    .replace(/【[^】]+】\s*$/, '') // 作品名
-    .trim();
-  if (/^\d+番手/.test(text)) return null; // 歌枠リレーの出演順
+  const text = stripNotes(rest);
+  if (!text || /^\d+番手/.test(text)) return null; // 歌枠リレーの出演順
   const pair = splitTitleArtist(text, separators);
   if (pair) {
-    const artist = pair.artist.replace(/,\s+.+$/, '').trim(); // 「スピッツ,  ピアノ伴奏」の補足
-    return { title: pair.title, artist: artist || (KNOWN_ARTISTS[pair.title] ?? null) };
+    const title = cleanTail(pair.title);
+    if (!title || NOT_SONG.test(title)) return null;
+    const artist = cleanTail(pair.artist.replace(/,\s+.+$/, '')); // 「スピッツ,  ピアノ伴奏」の補足
+    return { title, artist: artist || knownArtist(title) };
   }
   // 「Swing Days!  -」のように区切りのあとが空(オリジナル曲など)
-  const trailing = text.match(/^(.+?)\s*(?:[-–—／]|\s\/)\s*$/);
-  if (trailing) {
+  const trailing = text.match(/^(.+?)\s*(?:[-‐‑–—―／]|\s\/)\s*$/);
+  if (trailing && !NOT_SONG.test(trailing[1].trim())) {
     const title = trailing[1].trim();
-    return { title, artist: KNOWN_ARTISTS[title] ?? null };
+    return { title, artist: knownArtist(title) };
   }
   return null;
 }
 
 function separatorsFor(lines: string[]) {
   const timed = lines.filter((l) => TIME_ONCE.test(l));
-  const count = (sep: RegExp) => timed.filter((l) => sep.test(l)).length;
+  const count = (sep: RegExp) => timed.filter((l) => l.match(sep)).length;
   return [...SEPARATORS].sort((a, b) => count(b) - count(a));
 }
 
+interface Found {
+  no: number | null;
+  title: string;
+  artist: string | null;
+  time: number;
+}
+
+interface TimedLine {
+  time: number;
+  /** 時刻より前にある曲番号(M01 / No.01) */
+  prefixNo: number | null;
+  /** 時刻のあとの文字列 */
+  rest: string;
+  index: number;
+}
+
+/** 時刻のある行を読む。曲紹介・開始・終了の 3 つが並ぶ行は、2 つ目(曲の開始)を使う */
+function readTimedLine(text: string, index: number): TimedLine | null {
+  const times = [...text.matchAll(TIME_GLOBAL)];
+  if (times.length === 0) return null;
+  const pick = times.length >= 3 ? times[1] : times[0];
+  const lastTime = times[times.length - 1];
+  const prefix = text.slice(0, times[0].index).replace(/^[└├┗┣]\s*/, '').trim();
+  const prefixNo = prefix.match(/^(?:M|No\.?)\s*(\d{1,3})\b/i);
+  return {
+    time: toSeconds(pick[1], pick[2], pick[3]),
+    prefixNo: prefixNo ? Number(prefixNo[1]) : null,
+    rest: text.slice((lastTime.index ?? 0) + lastTime[0].length),
+    index,
+  };
+}
+
 export function parseSetlist(raw: string): SetlistSong[] {
-  const lines = raw.replace(/\r/g, '').split('\n');
+  const lines = raw.replace(/\r/g, '').split('\n').map((l) => l.trim());
   const separators = separatorsFor(lines);
-  const songs: { no: number | null; title: string; artist: string | null; time: number }[] = [];
-  // 直前の時刻の行(次の行への折り返しをつなげるため)
-  let last: { time: number; no: number | null; rest: string; songIndex: number | null } | null = null;
+  const songs: Found[] = [];
+  // 直前の時刻の行(次の行への折り返しや、次の行に書かれた曲をつなげるため)
+  let last: { line: TimedLine; rest: string; no: number | null; songIndex: number | null; awaiting: boolean } | null =
+    null;
 
-  for (const line of lines) {
-    const text = line.trim();
-    if (!text) continue;
-    const times = [...text.matchAll(TIME_GLOBAL)];
+  lines.forEach((text, index) => {
+    if (!text) return;
+    const timed = readTimedLine(text, index);
 
-    if (times.length === 0) {
-      // 「(Kaijuu no Hanauta) - Vaundy」のような折り返し
-      if (last && /^[(（]/.test(text)) {
+    if (!timed) {
+      if (!last) return;
+      if (last.awaiting) {
+        // 「▶05:52〜10:48」の次の行に「🎵1.ミラクル /miwa」
+        last.awaiting = false;
+        const { no, rest } = stripLead(text);
+        const song = readSong(rest, separators);
+        if (song) {
+          songs.push({ no: no ?? last.no, time: last.line.time, ...song });
+          last.songIndex = songs.length - 1;
+        }
+      } else if (/^[(（]/.test(text)) {
+        // 「(Kaijuu no Hanauta) - Vaundy」のような折り返し
         last.rest = `${last.rest} ${text}`;
         const song = readSong(last.rest, separators);
         if (song && last.songIndex !== null) songs[last.songIndex] = { ...songs[last.songIndex], ...song };
         else if (song) {
-          songs.push({ no: last.no, time: last.time, ...song });
+          songs.push({ no: last.no, time: last.line.time, ...song });
           last.songIndex = songs.length - 1;
         }
       }
-      continue;
+      return;
     }
 
-    // 曲紹介・開始・終了の 3 つが並ぶ行は、2 つ目(曲の開始)を使う
-    const pick = times.length >= 3 ? times[1] : times[0];
-    const time = toSeconds(pick[1], pick[2], pick[3]);
-    const lastTime = times[times.length - 1];
-    const prefix = text.slice(0, times[0].index).replace(/^[└├┗┣]\s*/, '').trim();
-    let rest = text
-      .slice((lastTime.index ?? 0) + lastTime[0].length)
-      .replace(/^[\s　]*(?:[/／～~-]\s*)?/, '')
-      .replace(/^[🎶♪🎤🎵]+\s*/u, '')
-      .trim();
-
-    let no: number | null = null;
-    const prefixNo = prefix.match(/^M(\d{1,3})$/i);
-    if (prefixNo) no = Number(prefixNo[1]);
-    const restNo = rest.match(NUMBER);
-    if (restNo) {
-      no = Number(restNo[1] ?? restNo[2]);
-      rest = rest.slice(restNo[0].length).trim();
-    }
-
+    const { no, rest } = stripLead(timed.rest);
     const song = readSong(rest, separators);
-    if (song) songs.push({ no, time, ...song });
-    last = { time, no, rest, songIndex: song ? songs.length - 1 : null };
-  }
+    if (song) songs.push({ no: no ?? timed.prefixNo, time: timed.time, ...song });
+    last = {
+      line: timed,
+      rest,
+      no: no ?? timed.prefixNo,
+      songIndex: song ? songs.length - 1 : null,
+      // 時刻のあとに何も書かれていない行は、次の行に曲が書かれていることがある
+      awaiting: !song && rest.replace(/[～~〜\s]/g, '') === '',
+    };
+  });
 
-  return songs.map((s, i) => ({ ...s, no: s.no ?? i + 1 }));
+  return finish(songs.length > 0 ? songs : readTitleOnly(lines));
+}
+
+/**
+ * 曲名とアーティストの区切りが無いセトリ。「セトリ」の見出しより後の時刻の行と、「(歌)」の印が付いた行を、
+ * 曲名だけの曲として読む(区切りで 1 曲も読めなかったときだけ使う)
+ */
+function readTitleOnly(lines: string[]): Found[] {
+  const marked = lines.some((l) => /[(（]歌[)）]/.test(l));
+  const heading = lines.findIndex((l) => SETLIST_HEADING.test(l) && !TIME_ONCE.test(l));
+  if (!marked && heading < 0) return [];
+  const songs: Found[] = [];
+  let ended = false;
+  lines.forEach((text, index) => {
+    if (ended) return;
+    const timed = readTimedLine(text, index);
+    // 見出しのセトリは、曲のあとの区切り(空行や、時刻の無い行。雑談の目次などの見出し)までで読み終える
+    if (!timed && !marked && index > heading && songs.length > 0) ended = true;
+    if (!timed || (!marked && index < heading)) return;
+    if (/^[└├┗┣]/.test(text)) return;
+    const { no, rest } = stripLead(timed.rest);
+    let title = stripNotes(rest);
+    if (marked) {
+      if (!/[(（]歌[)）]\s*$/.test(title)) return;
+      title = title.replace(/\s*[(（]歌[)）]\s*$/, '');
+    }
+    if (!title || NOT_SONG.test(title) || GREETING.test(title)) return;
+    songs.push({ no: no ?? timed.prefixNo, time: timed.time, title, artist: knownArtist(title) });
+  });
+  return songs;
+}
+
+const songKey = (s: Found) =>
+  `${s.title}|${s.artist ?? ''}`.normalize('NFKC').toLowerCase().replace(/[\s'"’「」『』]/g, '');
+
+/**
+ * 同じ曲の重複を除き、番号が無い・飛んだり重なったりしているときは 1 から振り直す。
+ * 重複とみなすのは、開始時刻がまったく同じもの(日本語と英語でセトリを 2 回書いたもの)と、
+ * 曲名とアーティストが同じもの(セトリと目次の両方に書かれた曲)。ただし両方にセトリの番号が付いていれば、
+ * 書き手が別の曲として数えている(歌い直し)ので残す
+ */
+function finish(found: Found[]): SetlistSong[] {
+  const kept: Found[] = [];
+  for (const s of found) {
+    const key = songKey(s);
+    const duplicate = kept.some(
+      (k) => k.time === s.time || (songKey(k) === key && (k.no === null || s.no === null || k.no === s.no)),
+    );
+    if (!duplicate) kept.push(s);
+  }
+  const songs = kept;
+  const numbered = songs.every((s, i) => s.no !== null && (i === 0 || s.no > (songs[i - 1].no ?? 0)));
+  return songs.map((s, i) => ({ no: numbered ? (s.no as number) : i + 1, title: s.title, artist: s.artist, time: s.time }));
 }
 
 /** 曲の一覧に表示する時刻(hh:mm:ss) */
