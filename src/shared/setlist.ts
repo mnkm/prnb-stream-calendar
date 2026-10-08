@@ -15,7 +15,8 @@
  *   13:40 welcome to my fanclub's night(歌)                                 (「(歌)」の印)
  *
  * 曲だけを取り出し、開始・告知・キリバンなど曲以外の時刻や、補足(伴奏・作品名・発売日・リクエストした人)は捨てる。
- * セトリと目次(雑談も含む全体のタイムスタンプ)の両方に同じ曲がある場合は、最初の 1 回だけにする。
+ * 「セトリ」の見出しがあれば、その下(次の「タイムスタンプ」などの見出しの手前まで)だけを読み、
+ * セトリと目次(雑談も含む全体のタイムスタンプ)の両方に曲が書かれていても、セトリの方だけを出す。
  * 読み取りは表示するときに行うので、規則を直しても YouTube からコメントを取り直す必要はない。
  */
 
@@ -100,15 +101,42 @@ const TRAILING_EMOJI = /[\s\p{Emoji_Presentation}‍️]+$/u;
 
 const cleanTail = (s: string) => s.replace(TRAILING_EMOJI, '').replace(PERFORMANCE_NOTE, '').replace(TRAILING_EMOJI, '').trim();
 
+/** アーティストのあとに「,」で続く補足(「スピッツ,  ピアノ伴奏」「, New」)。「鏡音リン, 鏡音レン」のような連名は残す */
+const COMMA_NOTE =
+  /[,，]\s*(?:[^,，]*(?:伴奏|お試し|choice|ワンコーラス|弾き語り|のみ|アカペラ|替え歌|(?<![a-z])ver|音量|達成|登録|※)[^,，]*|new|\d+|[^\p{L}\p{N},，]*)\s*$/iu;
+
+function stripCommaNotes(artist: string) {
+  let a = artist;
+  for (let prev = ''; prev !== a; ) {
+    prev = a;
+    a = a.replace(COMMA_NOTE, '').trim();
+  }
+  return a;
+}
+
+/**
+ * 「日本語 / 英語」の 2 か国語で書かれ、曲名とアーティストを「,」で区切ったセトリ
+ * (「スタートライン!,アイカツスターズ / Start Line!, Aikatsu Stars!」)
+ */
+const BILINGUAL_COMMA = /^[^/／]+[,，][^/／]+\s*[/／]\s*[^,，]+[,，]/;
+
+function readCommaSong(text: string) {
+  const ja = text.split(/\s*[/／]\s*/)[0];
+  const [title, artist] = ja.split(/\s*[,，]\s*/);
+  if (!title || NOT_SONG.test(title)) return null;
+  return { title: cleanTail(title), artist: artist ? cleanTail(artist) : knownArtist(title) };
+}
+
 /** 時刻のあとの文字列を曲として読む。曲名とアーティストの形になっていなければ null(曲以外) */
-function readSong(rest: string, separators: RegExp[]): { title: string; artist: string | null } | null {
+function readSong(rest: string, separators: RegExp[], commaMode = false): { title: string; artist: string | null } | null {
   const text = stripNotes(rest);
   if (!text || /^\d+番手/.test(text)) return null; // 歌枠リレーの出演順
+  if (commaMode && /[,，]/.test(text)) return readCommaSong(text);
   const pair = splitTitleArtist(text, separators);
   if (pair) {
     const title = cleanTail(pair.title);
     if (!title || NOT_SONG.test(title)) return null;
-    const artist = cleanTail(pair.artist.replace(/,\s+.+$/, '')); // 「スピッツ,  ピアノ伴奏」の補足
+    const artist = cleanTail(stripCommaNotes(pair.artist));
     return { title, artist: artist || knownArtist(title) };
   }
   // 「Swing Days!  -」のように区切りのあとが空(オリジナル曲など)
@@ -143,7 +171,8 @@ interface TimedLine {
 }
 
 /** 時刻のある行を読む。曲紹介・開始・終了の 3 つが並ぶ行は、2 つ目(曲の開始)を使う */
-function readTimedLine(text: string, index: number): TimedLine | null {
+function readTimedLine(line: string, index: number): TimedLine | null {
+  const text = line.replace(/※.*$/u, ''); // 「※語り( 02:00:39 )」のような補足の中の時刻は使わない
   const times = [...text.matchAll(TIME_GLOBAL)];
   if (times.length === 0) return null;
   const pick = times.length >= 3 ? times[1] : times[0];
@@ -158,9 +187,34 @@ function readTimedLine(text: string, index: number): TimedLine | null {
   };
 }
 
+/** セトリとは別の、雑談も含む全体のタイムスタンプ(目次)の見出し */
+const OTHER_HEADING = /タイムスタンプ|目次|雑談|トーク|配信内容|time\s*stamps?|chat/i;
+
+/**
+ * 「セトリ」の見出しから、次の見出し(「タイムスタンプ」など)の手前までの行。見出しが無ければ null。
+ * セトリと目次の両方に曲が書かれているときは、セトリの方だけを読むために使う
+ */
+function setlistSection(lines: string[]): string[] | null {
+  const start = lines.findIndex((l) => SETLIST_HEADING.test(l) && !TIME_ONCE.test(l));
+  if (start < 0) return null;
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((l) => l && !TIME_ONCE.test(l) && OTHER_HEADING.test(l) && !SETLIST_HEADING.test(l));
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
 export function parseSetlist(raw: string): SetlistSong[] {
   const lines = raw.replace(/\r/g, '').split('\n').map((l) => l.trim());
+  const section = setlistSection(lines);
+  const fromSection = section ? readLines(section) : [];
+  // 見出しの下で 3 曲以上読めればセトリの部分だけを使う。読めなければ(見出しだけ・見出しの外に曲)全体を読む
+  const songs = fromSection.length >= 3 ? fromSection : readLines(lines);
+  return finish(songs.length > 0 ? songs : readTitleOnly(lines));
+}
+
+function readLines(lines: string[]): Found[] {
   const separators = separatorsFor(lines);
+  const timedRests = lines.filter((l) => TIME_ONCE.test(l)).map((l) => readTimedLine(l, 0)?.rest.trim() ?? '');
+  const commaMode = timedRests.filter((r) => BILINGUAL_COMMA.test(r)).length >= 3;
   const songs: Found[] = [];
   // 直前の時刻の行(次の行への折り返しや、次の行に書かれた曲をつなげるため)
   let last: { line: TimedLine; rest: string; no: number | null; songIndex: number | null; awaiting: boolean } | null =
@@ -176,7 +230,7 @@ export function parseSetlist(raw: string): SetlistSong[] {
         // 「▶05:52〜10:48」の次の行に「🎵1.ミラクル /miwa」
         last.awaiting = false;
         const { no, rest } = stripLead(text);
-        const song = readSong(rest, separators);
+        const song = readSong(rest, separators, commaMode);
         if (song) {
           songs.push({ no: no ?? last.no, time: last.line.time, ...song });
           last.songIndex = songs.length - 1;
@@ -184,7 +238,7 @@ export function parseSetlist(raw: string): SetlistSong[] {
       } else if (/^[(（]/.test(text)) {
         // 「(Kaijuu no Hanauta) - Vaundy」のような折り返し
         last.rest = `${last.rest} ${text}`;
-        const song = readSong(last.rest, separators);
+        const song = readSong(last.rest, separators, commaMode);
         if (song && last.songIndex !== null) songs[last.songIndex] = { ...songs[last.songIndex], ...song };
         else if (song) {
           songs.push({ no: last.no, time: last.line.time, ...song });
@@ -195,7 +249,7 @@ export function parseSetlist(raw: string): SetlistSong[] {
     }
 
     const { no, rest } = stripLead(timed.rest);
-    const song = readSong(rest, separators);
+    const song = readSong(rest, separators, commaMode);
     if (song) songs.push({ no: no ?? timed.prefixNo, time: timed.time, ...song });
     last = {
       line: timed,
@@ -207,7 +261,7 @@ export function parseSetlist(raw: string): SetlistSong[] {
     };
   });
 
-  return finish(songs.length > 0 ? songs : readTitleOnly(lines));
+  return songs;
 }
 
 /**
