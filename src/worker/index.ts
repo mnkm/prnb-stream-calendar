@@ -17,6 +17,7 @@ import { toIsoSeconds } from './time';
 type Bindings = Env & {
   YOUTUBE_API_KEY: string;
   ADMIN_TOKEN?: string;
+  GITHUB_TOKEN?: string;
 };
 
 const MAX_RANGE_MS = 100 * 24 * 60 * 60 * 1000;
