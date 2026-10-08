@@ -5,21 +5,27 @@ import {
   type ChannelProfile,
   type ChannelRow,
   type VideoRow,
+  deletePlaylistsStmt,
   deleteVideosStmt,
   fillSearchTitles,
   findActiveLiveIds,
+  findPendingPlaylist,
   findSetlistTargets,
   findExistingVideoIds,
   listEnabledChannels,
+  listPlaylistIds,
   markChannelSyncedStmt,
   markMembersOnlyStmt,
+  markPlaylistsSyncedStmt,
   markPremieresStmt,
   markShortsStmt,
+  playlistItemsPageStmts,
   saveBackfillProgress,
   saveMembersScanProgress,
   saveSetlistStmt,
   savePremieresScanProgress,
   updateChannelProfile,
+  upsertPlaylistStmt,
   upsertVideoStmts,
   writeBatch,
 } from './db';
@@ -71,6 +77,10 @@ const SETLIST_CHECK_HOURS = [1, 6, 24, 72, 168];
 const SETLIST_COMMENTS = 20;
 /** セトリとみなすコメントに含まれるタイムスタンプの数 */
 const SETLIST_MIN_TIMESTAMPS = 3;
+/** 再生リストの一覧を取り直す間隔 */
+const PLAYLISTS_REFRESH_MS = 24 * 60 * 60 * 1000;
+/** 1 回の実行で読む再生リストの中身のページ数(1 ページ = 50 件) */
+const PLAYLIST_PAGES_PER_RUN = 8;
 /** チャンネルのプロフィール(説明・登録者数など)を取り直す間隔 */
 const PROFILE_REFRESH_MS = 24 * 60 * 60 * 1000;
 
@@ -140,6 +150,13 @@ export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
     await checkSetlists(db, yt, budget);
   } catch (err) {
     console.error('checkSetlists failed', err);
+  }
+
+  // 4. 残りの予算で、再生リストの一覧(1 日 1 回)と、本数が変わった再生リストの中身を読む
+  try {
+    await syncPlaylists(db, yt, budget, channels);
+  } catch (err) {
+    console.error('syncPlaylists failed', err);
   }
 
   // 検索用の列を追加する前に登録した行を埋める(全部埋まっていれば読み取り 1 回だけ)
@@ -422,4 +439,42 @@ function nextSetlistCheck(endedAt: string, now: Date): string | null {
   const ended = Date.parse(endedAt);
   const next = SETLIST_CHECK_HOURS.map((h) => ended + h * 3600_000).find((t) => t > now.getTime());
   return next === undefined ? null : toIsoSeconds(new Date(next));
+}
+
+/**
+ * 再生リストの同期。一覧はチャンネルごとに 1 日 1 回取り直し、本数が変わった(または新しい)再生リストだけ
+ * 中身を最初から読み直す。中身はページ単位で次回の実行に持ち越せる
+ */
+async function syncPlaylists(db: D1Database, yt: YouTubeClient, budget: RequestBudget, channels: ChannelRow[]) {
+  const now = new Date();
+  const stamp = toIsoSeconds(now);
+
+  // 一覧の取り直し: 1 回の実行で 1 チャンネルまで(YouTube 1 回 + D1 2 回)
+  const due = channels.find(
+    (c) => !c.playlists_synced_at || now.getTime() - Date.parse(c.playlists_synced_at) >= PLAYLISTS_REFRESH_MS,
+  );
+  if (due && budget.remaining >= 5) {
+    const lists = await yt.listChannelPlaylists(due.id);
+    const known = await listPlaylistIds(db, due.id);
+    const current = new Set(lists.map((p) => p.id));
+    await writeBatch(db, [
+      ...lists.map((p) => upsertPlaylistStmt(db, due.id, p, stamp)),
+      deletePlaylistsStmt(db, known.filter((id) => !current.has(id))),
+      markPlaylistsSyncedStmt(db, due.id, stamp),
+    ]);
+  }
+
+  // 中身の読み込み: 読む必要がある再生リストを 1 つずつ、ページ単位で進める
+  let pages = 0;
+  while (pages < PLAYLIST_PAGES_PER_RUN && budget.remaining >= 4) {
+    const target = await findPendingPlaylist(db);
+    if (!target) return;
+    let token = target.items_page_token ?? undefined;
+    do {
+      const page = await yt.listPlaylistItems(target.id, token);
+      await writeBatch(db, playlistItemsPageStmts(db, target.id, page, !token, stamp));
+      pages++;
+      token = page?.nextPageToken;
+    } while (token && pages < PLAYLIST_PAGES_PER_RUN && budget.remaining >= 3);
+  }
 }

@@ -2,6 +2,8 @@ import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import {
   type CalendarEvent,
   type Channel,
+  type Playlist,
+  type PlaylistDetail,
   type SearchPage,
   type Setlist,
   VIDEO_TYPES,
@@ -57,5 +59,31 @@ export const setlistQuery = (videoId: string) =>
       if (!res.ok) throw new Error(`/api/setlist → ${res.status}`);
       return (await res.json()) as Setlist;
     },
+    staleTime: 5 * 60_000,
+  });
+
+const enc = encodeURIComponent;
+
+/** チャンネルの再生リスト(おすすめが先頭) */
+export const channelPlaylistsQuery = (channelId: string) =>
+  queryOptions({
+    queryKey: ['channel-playlists', channelId],
+    queryFn: () => getJson<Playlist[]>(`/api/channels/${enc(channelId)}/playlists`),
+    staleTime: 5 * 60_000,
+  });
+
+/** 再生リストの中身 */
+export const playlistQuery = (playlistId: string) =>
+  queryOptions({
+    queryKey: ['playlist', playlistId],
+    queryFn: () => getJson<PlaylistDetail>(`/api/playlists/${enc(playlistId)}`),
+    staleTime: 5 * 60_000,
+  });
+
+/** 動画が入っている再生リスト */
+export const videoPlaylistsQuery = (videoId: string) =>
+  queryOptions({
+    queryKey: ['video-playlists', videoId],
+    queryFn: () => getJson<Playlist[]>(`/api/videos/${enc(videoId)}/playlists`),
     staleTime: 5 * 60_000,
   });

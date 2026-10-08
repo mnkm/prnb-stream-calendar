@@ -1,15 +1,24 @@
 import { ArrowLeft, Clock, Crown, ExternalLink, Play, Timer } from 'lucide-react';
 import { useCallback, useRef, useState } from 'react';
-import type { CalendarEvent, Channel } from '../../shared/types';
+import type { CalendarEvent, Channel, Playlist } from '../../shared/types';
+import type { ChannelDialogState } from './ChannelDialog';
 import { formatDayHeading, formatDuration, formatEventWhen, watchUrl } from '../lib/format';
 import { LiveStatusBadge, MembersOnlyBadge, TypeBadge } from './Badges';
 import { EventRow } from './EventRow';
 import { Modal } from './Modal';
+import { VideoPlaylists } from './Playlists';
 import { SetlistSection } from './SetlistSection';
 import { Thumbnail } from './Thumbnail';
 
 export type DialogState =
-  | { kind: 'event'; event: CalendarEvent; day?: { date: Date; events: CalendarEvent[] } }
+  | {
+      kind: 'event';
+      event: CalendarEvent;
+      /** 日別の一覧から開いたとき(戻れる) */
+      day?: { date: Date; events: CalendarEvent[] };
+      /** 再生リストの中身から開いたとき(戻れる) */
+      playlist?: ChannelDialogState;
+    }
   | { kind: 'day'; date: Date; events: CalendarEvent[] };
 
 interface Props {
@@ -17,9 +26,13 @@ interface Props {
   channelMap: Map<string, Channel>;
   showChannelColor: boolean;
   onChange: (state: DialogState | null) => void;
+  /** 「この動画が入っている再生リスト」を押したとき */
+  onOpenPlaylist: (playlist: Playlist, from: CalendarEvent) => void;
+  /** 再生リストから開いた動画で「戻る」を押したとき */
+  onBackToPlaylist: (state: ChannelDialogState) => void;
 }
 
-export function EventDialog({ state, channelMap, showChannelColor, onChange }: Props) {
+export function EventDialog({ state, channelMap, showChannelColor, onChange, onOpenPlaylist, onBackToPlaylist }: Props) {
   const close = useCallback(() => onChange(null), [onChange]);
 
   return (
@@ -28,7 +41,14 @@ export function EventDialog({ state, channelMap, showChannelColor, onChange }: P
         <EventDetail
           key={state.event.id}
           event={state.event}
-          onBack={state.day ? () => onChange({ kind: 'day', ...state.day! }) : undefined}
+          onBack={
+            state.day
+              ? () => onChange({ kind: 'day', ...state.day! })
+              : state.playlist
+                ? () => onBackToPlaylist(state.playlist!)
+                : undefined
+          }
+          onOpenPlaylist={(p) => onOpenPlaylist(p, state.event)}
         />
       ) : state?.kind === 'day' ? (
         <div className="p-5 pt-6">
@@ -53,7 +73,15 @@ export function EventDialog({ state, channelMap, showChannelColor, onChange }: P
 const hasSetlist = (event: CalendarEvent) =>
   event.type === 'live' && event.liveStatus === 'ended' && !event.membersOnly && event.title.includes('歌枠');
 
-function EventDetail({ event, onBack }: { event: CalendarEvent; onBack?: () => void }) {
+function EventDetail({
+  event,
+  onBack,
+  onOpenPlaylist,
+}: {
+  event: CalendarEvent;
+  onBack?: () => void;
+  onOpenPlaylist: (playlist: Playlist) => void;
+}) {
   // 再生を始める位置(秒)。null なら再生前(サムネイルを表示)
   const [start, setStart] = useState<number | null>(null);
   const playerRef = useRef<HTMLDivElement>(null);
@@ -139,6 +167,7 @@ function EventDetail({ event, onBack }: { event: CalendarEvent; onBack?: () => v
             <ExternalLink className="size-4" />
           </a>
         </div>
+        <VideoPlaylists videoId={event.id} onOpen={onOpenPlaylist} />
         {hasSetlist(event) && <SetlistSection videoId={event.id} onSeek={seek} />}
       </div>
     </div>

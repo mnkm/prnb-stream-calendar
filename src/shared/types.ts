@@ -48,3 +48,21 @@ export interface Setlist {
   author: string;
   text: string;
 }
+
+/** チャンネルが作った再生リスト */
+export interface Playlist {
+  id: string;
+  channelId: string;
+  title: string;
+  thumbnailUrl: string | null;
+  /** YouTube 上の本数(このカレンダーに無い非公開・削除済みの動画も含む) */
+  itemCount: number;
+  /** 初めて見る人向けのおすすめ(一覧の先頭に固定する) */
+  recommended: boolean;
+}
+
+/** 再生リストの中身。events はこのカレンダーに登録済みの動画だけ(再生リストの並び順) */
+export interface PlaylistDetail {
+  playlist: Playlist;
+  events: CalendarEvent[];
+}

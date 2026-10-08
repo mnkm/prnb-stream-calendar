@@ -50,6 +50,19 @@ export interface YtComment {
   text: string;
 }
 
+export interface YtPlaylist {
+  id: string;
+  title: string;
+  publishedAt: string;
+  thumbnailUrl: string | null;
+  itemCount: number;
+}
+
+export interface YtPlaylistItemsPage {
+  items: { videoId: string; position: number; addedAt: string }[];
+  nextPageToken?: string;
+}
+
 export interface PlaylistPage {
   ids: string[];
   nextPageToken?: string;
@@ -118,6 +131,69 @@ export class YouTubeClient {
   }
 
   /** 1 unit / ページ (最大 50 件)。プレイリストが存在しなければ null */
+  /** チャンネルの公開の再生リスト(全ページ)。1 unit / 50 件 */
+  async listChannelPlaylists(channelId: string): Promise<YtPlaylist[]> {
+    const lists: YtPlaylist[] = [];
+    let pageToken: string | undefined;
+    do {
+      const data = await this.get<{
+        items?: {
+          id: string;
+          snippet: { title: string; publishedAt: string; thumbnails: Partial<Record<'medium' | 'default', YtThumbnail>> };
+          contentDetails: { itemCount: number };
+        }[];
+        nextPageToken?: string;
+      }>('playlists', {
+        part: 'snippet,contentDetails',
+        channelId,
+        maxResults: '50',
+        ...(pageToken ? { pageToken } : {}),
+      });
+      for (const p of data.items ?? []) {
+        lists.push({
+          id: p.id,
+          title: p.snippet.title,
+          publishedAt: p.snippet.publishedAt,
+          thumbnailUrl: p.snippet.thumbnails.medium?.url ?? p.snippet.thumbnails.default?.url ?? null,
+          itemCount: p.contentDetails.itemCount,
+        });
+      }
+      pageToken = data.nextPageToken;
+    } while (pageToken);
+    return lists;
+  }
+
+  /** 再生リストの中身の 1 ページ(並び順と追加日時つき)。1 unit / 50 件。再生リストが無ければ null */
+  async listPlaylistItems(playlistId: string, pageToken?: string): Promise<YtPlaylistItemsPage | null> {
+    try {
+      const data = await this.get<{
+        items?: { snippet: { position: number; publishedAt: string }; contentDetails: { videoId: string } }[];
+        nextPageToken?: string;
+      }>('playlistItems', {
+        part: 'snippet,contentDetails',
+        playlistId,
+        maxResults: '50',
+        ...(pageToken ? { pageToken } : {}),
+      });
+      return {
+        items: (data.items ?? []).map((i) => ({
+          videoId: i.contentDetails.videoId,
+          position: i.snippet.position,
+          addedAt: i.snippet.publishedAt,
+        })),
+        nextPageToken: data.nextPageToken,
+      };
+    } catch (err) {
+      // 再生リストが消えた・非公開になった場合は中身なしとして扱う(同じ再生リストで失敗し続けないように)。
+      // クォータ超過の 403 だけは、次回に読み直す
+      const gone =
+        err instanceof YouTubeApiError &&
+        (err.status === 404 || (err.status === 403 && !err.message.includes('quotaExceeded')));
+      if (gone) return null;
+      throw err;
+    }
+  }
+
   async listPlaylistPage(playlistId: string, pageToken?: string): Promise<PlaylistPage | null> {
     try {
       const data = await this.get<{
