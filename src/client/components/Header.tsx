@@ -33,46 +33,18 @@ interface Props {
   view: ViewMode;
   onViewChange: (view: ViewMode) => void;
   search: SearchProps;
-  /** チャンネルのアイコンを押したとき(プロフィールを開く) */
-  onSelectChannel: (channel: Channel) => void;
-  /** 「+N」を押したとき(チャンネル一覧を開く) */
+  /** YouTube ボタンを押したとき(チャンネル一覧を開く) */
   onOpenChannelList: () => void;
 }
 
-export function Header({ channels, view, onViewChange, search, onSelectChannel, onOpenChannelList }: Props) {
-  // チャンネルアイコンは先頭の 1 つだけ並べ、残りは「+N」にまとめる(押すとチャンネル一覧)
+export function Header({ channels, view, onViewChange, search, onOpenChannelList }: Props) {
+  // 左端には、並び順が先頭のチャンネル(01 PROJECT NEBULA 公式)のアイコンを、サイトの顔として表示するだけにする
   const first = channels[0];
-  const more = channels.length - 1;
 
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-canvas/70 backdrop-blur-xl">
       <div className="mx-auto flex max-w-7xl items-center gap-1.5 px-4 py-3 sm:gap-3 sm:px-6">
-        <div className="flex shrink-0 -space-x-2">
-          {first && (
-            <button
-              onClick={() => onSelectChannel(first)}
-              aria-label={`${first.title} のチャンネル情報`}
-              title={first.title}
-              className="relative rounded-full transition hover:z-10 hover:scale-105 focus-visible:z-10"
-            >
-              {first.iconUrl ? (
-                <img src={first.iconUrl} alt="" className="size-8 sm:size-9 rounded-full object-cover ring-2 ring-canvas" />
-              ) : (
-                <div className="size-8 sm:size-9 rounded-full ring-2 ring-canvas" style={{ background: first.color }} />
-              )}
-            </button>
-          )}
-          {more > 0 && (
-            <button
-              onClick={onOpenChannelList}
-              aria-label={`チャンネル一覧(全 ${channels.length} チャンネル)`}
-              title="チャンネル一覧"
-              className="relative grid size-8 sm:size-9 place-items-center rounded-full bg-surface text-xs font-semibold text-muted ring-2 ring-canvas transition tabular-nums hover:z-10 hover:scale-105 hover:text-ink"
-            >
-              +{more}
-            </button>
-          )}
-        </div>
+        {first && <SiteIcon channel={first} />}
         <div className="hidden min-w-0 flex-1 sm:block">
           {['PROJECT NEBULA', 'Stream Calendar'].map((line) => (
             <p key={line} className="truncate text-[11px] font-medium tracking-[0.18em] text-muted uppercase">
@@ -227,5 +199,20 @@ function YouTubeLogo({ className }: { className?: string }) {
       <rect width="28" height="20" rx="5" fill="#ff0033" />
       <path d="M11.2 5.6v8.8L18.8 10z" fill="#fff" />
     </svg>
+  );
+}
+
+/** 左端のアイコン(表示だけ)。画像を読み込めなかったときは、チャンネルの色の丸にする */
+function SiteIcon({ channel }: { channel: Channel }) {
+  const [failed, setFailed] = useState(false);
+  return channel.iconUrl && !failed ? (
+    <img
+      src={channel.iconUrl}
+      alt={channel.title}
+      onError={() => setFailed(true)}
+      className="size-8 shrink-0 rounded-full object-cover sm:size-9"
+    />
+  ) : (
+    <div className="size-8 shrink-0 rounded-full sm:size-9" style={{ background: channel.color }} aria-hidden />
   );
 }

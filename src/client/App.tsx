@@ -196,7 +196,6 @@ export default function App() {
           onOpen: () => setSearchOpen(true),
           onClose: closeSearch,
         }}
-        onSelectChannel={(channel) => setChannelDialog({ kind: 'channel', channel })}
         onOpenChannelList={() => setChannelDialog({ kind: 'list' })}
       />
 
