@@ -1,10 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
+import { ExternalLink } from 'lucide-react';
 import { useMemo } from 'react';
 import { formatSetlistTime, parseSetlist } from '../../shared/setlist';
 import { setlistQuery } from '../lib/api';
 
 /**
  * 歌枠のセトリ。番号・曲名・アーティスト・時刻だけのシンプルな一覧で、最初から開いた状態で表示する。
+ * 時刻を押すとダイアログ内のプレーヤーで、右のアイコンを押すと YouTube(スマホはアプリ)で、その位置から再生する。
  * まだ見つかっていない、または曲が読み取れないときは何も表示しない
  */
 export function SetlistSection({ videoId, onSeek }: { videoId: string; onSeek: (seconds: number) => void }) {
@@ -33,6 +35,16 @@ export function SetlistSection({ videoId, onSeek }: { videoId: string; onSeek: (
             >
               {formatSetlistTime(song.time)}
             </button>
+            <a
+              href={`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&t=${song.time}s`}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`${song.title} を YouTube で ${formatSetlistTime(song.time)} から開く`}
+              title="YouTube で開く"
+              className="-ml-1.5 grid size-7 shrink-0 place-items-center rounded-full text-muted transition hover:bg-ink/5 hover:text-ink"
+            >
+              <ExternalLink className="size-3.5" aria-hidden />
+            </a>
           </li>
         ))}
       </ol>
