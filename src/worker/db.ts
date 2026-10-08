@@ -1,5 +1,5 @@
 import { normalizeForSearch } from '../shared/search';
-import type { CalendarEvent, Channel, LiveStatus, SearchPage, VideoType } from '../shared/types';
+import type { CalendarEvent, Channel, LiveStatus, SearchPage, Setlist, VideoType } from '../shared/types';
 
 export type BackfillStage = 'uploads' | 'shorts' | 'done';
 
@@ -346,4 +346,48 @@ export async function searchEvents(db: D1Database, q: SearchQuery): Promise<Sear
     for (const { type, n } of countRows.results) counts[type] = n;
   }
   return { events: rows.map(toEvent), nextCursor: hasMore ? encodeCursor(rows[rows.length - 1]) : null, counts };
+}
+
+/** セトリを確認する歌枠。まだ確認していないもの、または次に確認する日時を過ぎたものを、新しい順に */
+export async function findSetlistTargets(db: D1Database, now: string, notBefore: string, limit: number) {
+  const { results } = await db
+    .prepare(
+      `SELECT v.id, v.ended_at
+         FROM videos v LEFT JOIN setlists s ON s.video_id = v.id
+        WHERE v.type = 'live' AND v.live_status = 'ended' AND v.members_only = 0
+          AND v.title LIKE '%歌枠%' AND v.ended_at IS NOT NULL AND v.ended_at <= ?
+          AND (s.video_id IS NULL OR (s.text IS NULL AND s.next_check_at <= ?))
+        ORDER BY v.ended_at DESC
+        LIMIT ?`,
+    )
+    .bind(notBefore, now, limit)
+    .all<{ id: string; ended_at: string }>();
+  return results;
+}
+
+export interface SetlistResult {
+  videoId: string;
+  comment: { id: string; author: string; text: string } | null;
+  checkedAt: string;
+  nextCheckAt: string | null;
+}
+
+export function saveSetlistStmt(db: D1Database, r: SetlistResult) {
+  return db
+    .prepare(
+      `INSERT INTO setlists (video_id, comment_id, author, text, checked_at, next_check_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (video_id) DO UPDATE SET
+         comment_id = excluded.comment_id, author = excluded.author, text = excluded.text,
+         checked_at = excluded.checked_at, next_check_at = excluded.next_check_at`,
+    )
+    .bind(r.videoId, r.comment?.id ?? null, r.comment?.author ?? null, r.comment?.text ?? null, r.checkedAt, r.nextCheckAt);
+}
+
+export async function getSetlist(db: D1Database, videoId: string): Promise<Setlist | null> {
+  const row = await db
+    .prepare('SELECT author, text FROM setlists WHERE video_id = ? AND text IS NOT NULL')
+    .bind(videoId)
+    .first<{ author: string; text: string }>();
+  return row ? { author: row.author, text: row.text } : null;
 }

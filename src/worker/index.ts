@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { splitSearchTerms } from '../shared/search';
 import { VIDEO_TYPES, type VideoType } from '../shared/types';
-import { listEnabledChannels, queryEvents, searchEvents, toChannel } from './db';
+import { getSetlist, listEnabledChannels, queryEvents, searchEvents, toChannel } from './db';
 import { syncAll } from './sync';
 import { toIsoSeconds } from './time';
 
@@ -63,6 +63,14 @@ app.get('/search', async (c) => {
   });
   c.header('Cache-Control', 'public, max-age=60');
   return c.json(result);
+});
+
+/** 歌枠のセトリ(コメントの原文と書き手)。まだ見つかっていなければ 404 */
+app.get('/setlist/:id', async (c) => {
+  const setlist = await getSetlist(c.env.DB, c.req.param('id'));
+  if (!setlist) return c.json({ error: 'not found' }, 404);
+  c.header('Cache-Control', 'public, max-age=300');
+  return c.json(setlist);
 });
 
 /** 手動同期(初回の取り込みや動作確認用)。Authorization: Bearer <ADMIN_TOKEN> */
