@@ -46,7 +46,7 @@ export function Header({ channels, view, onViewChange, search, onSelectChannel, 
 
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-canvas/70 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-7xl items-center gap-2 px-4 py-3 sm:gap-3 sm:px-6">
+      <div className="mx-auto flex max-w-7xl items-center gap-1.5 px-4 py-3 sm:gap-3 sm:px-6">
         <div className="flex shrink-0 -space-x-2">
           {first && (
             <button
@@ -56,9 +56,9 @@ export function Header({ channels, view, onViewChange, search, onSelectChannel, 
               className="relative rounded-full transition hover:z-10 hover:scale-105 focus-visible:z-10"
             >
               {first.iconUrl ? (
-                <img src={first.iconUrl} alt="" className="size-9 rounded-full object-cover ring-2 ring-canvas" />
+                <img src={first.iconUrl} alt="" className="size-8 sm:size-9 rounded-full object-cover ring-2 ring-canvas" />
               ) : (
-                <div className="size-9 rounded-full ring-2 ring-canvas" style={{ background: first.color }} />
+                <div className="size-8 sm:size-9 rounded-full ring-2 ring-canvas" style={{ background: first.color }} />
               )}
             </button>
           )}
@@ -67,7 +67,7 @@ export function Header({ channels, view, onViewChange, search, onSelectChannel, 
               onClick={onOpenChannelList}
               aria-label={`チャンネル一覧(全 ${channels.length} チャンネル)`}
               title="チャンネル一覧"
-              className="relative grid size-9 place-items-center rounded-full bg-surface text-xs font-semibold text-muted ring-2 ring-canvas transition tabular-nums hover:z-10 hover:scale-105 hover:text-ink"
+              className="relative grid size-8 sm:size-9 place-items-center rounded-full bg-surface text-xs font-semibold text-muted ring-2 ring-canvas transition tabular-nums hover:z-10 hover:scale-105 hover:text-ink"
             >
               +{more}
             </button>
@@ -87,7 +87,7 @@ export function Header({ channels, view, onViewChange, search, onSelectChannel, 
           aria-label={search.open ? '検索を閉じる' : 'キーワードで検索'}
           aria-expanded={search.open}
           className={clsx(
-            'grid size-9 shrink-0 place-items-center rounded-full border border-line transition',
+            'grid size-8 sm:size-9 shrink-0 place-items-center rounded-full border border-line transition',
             search.open ? 'bg-ink text-canvas' : 'bg-surface/80 text-muted hover:text-ink',
           )}
         >
@@ -96,6 +96,14 @@ export function Header({ channels, view, onViewChange, search, onSelectChannel, 
         <ThemeToggle />
 
         <ViewTabs view={view} onViewChange={onViewChange} />
+        <button
+          onClick={onOpenChannelList}
+          aria-label="チャンネル一覧"
+          title="チャンネル一覧"
+          className="grid size-8 sm:size-9 shrink-0 place-items-center rounded-full border border-line bg-surface/80 transition hover:bg-surface"
+        >
+          <YouTubeLogo className="h-3.5 w-5" />
+        </button>
       </div>
 
       {search.open && <SearchBar {...search} />}
@@ -113,7 +121,8 @@ function ThemeToggle() {
       onClick={() => setPref(next)}
       aria-label={`テーマ: ${label}(押すと${THEME_META[next].label}に切り替え)`}
       title={`テーマ: ${label}`}
-      className="grid size-9 shrink-0 place-items-center rounded-full border border-line bg-surface/80 text-muted transition hover:text-ink"
+      // 幅 360px 未満の小さな画面では、ヘッダーに入りきらないので隠す(テーマは「自動」で表示される)
+      className="grid size-8 shrink-0 place-items-center rounded-full border border-line bg-surface/80 text-muted transition hover:text-ink max-[359px]:hidden sm:size-9"
     >
       <Icon className="size-4" aria-hidden />
     </button>
@@ -199,7 +208,7 @@ function ViewTabs({ view, onViewChange }: { view: ViewMode; onViewChange: (view:
           aria-selected={view === value}
           onClick={() => onViewChange(value)}
           className={clsx(
-            'relative flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors',
+            'relative flex items-center gap-1.5 rounded-full px-2 py-1.5 text-xs font-medium whitespace-nowrap transition-colors sm:px-3',
             view === value ? 'text-canvas' : 'text-muted hover:text-ink',
           )}
         >
@@ -208,5 +217,15 @@ function ViewTabs({ view, onViewChange }: { view: ViewMode; onViewChange: (view:
         </button>
       ))}
     </div>
+  );
+}
+
+/** YouTube のロゴ(lucide にはブランドのアイコンがないため、赤い角丸の四角と白い三角で描く) */
+function YouTubeLogo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 28 20" className={className} aria-hidden>
+      <rect width="28" height="20" rx="5" fill="#ff0033" />
+      <path d="M11.2 5.6v8.8L18.8 10z" fill="#fff" />
+    </svg>
   );
 }
