@@ -80,7 +80,10 @@ function stripLead(text: string): { no: number | null; rest: string } {
 
 /** 補足(リクエストした人・発売日・作品名)を外す */
 function stripNotes(text: string) {
-  let t = text.replace(/\s*[@＠]\S+\s*さん\s*$/u, '').trim();
+  let t = text
+    .replace(/\s*※.*$/u, '') // 「※1番のみ」「※Piano Ver.」などの補足
+    .replace(/(?<=[\s)）])[@＠][^\s@＠]+(?:\s*さん)?\s*$/u, '') // リクエストした人(曲名の「star?@Formo」は残す)
+    .replace(/[\s,，、]+$/u, '');
   const date = /[（(]\d{4}[/／.]\d{1,2}[/／.]\d{1,2}[)）]\s*$/;
   if (date.test(t)) {
     t = t.replace(date, '').trim();
