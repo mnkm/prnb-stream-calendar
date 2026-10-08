@@ -33,10 +33,10 @@ const TIME_SOURCE = String.raw`(?<![\d:])(\d{1,2}):(\d{2})(?::(\d{2}))?(?![\d:])
 const TIME_GLOBAL = new RegExp(TIME_SOURCE, 'g');
 const TIME_ONCE = new RegExp(TIME_SOURCE);
 
-/** 曲番号: 「No.16 」「No.01 /」「01.」「01．」「【01】」 */
-const NUMBER = /^No\.?\s*(\d{1,3})(?:\s*[.．:：)）/／]\s*|\s+)|^(\d{1,3})\s*[.．:：)）]\s*|^【(\d{1,3})】\s*/i;
+/** 曲番号: 「No.16 」「No.01 /」「01.」「01．」「【01】」「M3 」 */
+const NUMBER = /^(?:No\.?|M)\s*(\d{1,3})(?:\s*[.．:：)）/／]\s*|\s+)|^(\d{1,3})\s*[.．:：)）]\s*|^【(\d{1,3})】\s*/i;
 /** 曲名とアーティストの区切り。コメントの中で多く使われているものから試す */
-const SEPARATORS = [/／/g, /\s+\/\s*/g, /\//g, /\s+[-‐‑–—―]\s*/g];
+const SEPARATORS = [/／/g, /\s+\/+\s*/g, /\//g, /\s+[-‐‑–—―]+\s*/g];
 /** 曲名の前後に付く記号(行頭の区切り・矢印・絵文字など) */
 const LEADING = /^(?:[\s　]|[/／～~\-‐)）▶►・=＝]|[\p{Extended_Pictographic}‍️♪♫])+/u;
 /** 曲以外の時刻なのに「曲名/英語」の形で書かれやすいもの */
@@ -149,7 +149,8 @@ function readSong(rest: string, separators: RegExp[], commaMode = false): { titl
 }
 
 function separatorsFor(lines: string[]) {
-  const timed = lines.filter((l) => TIME_ONCE.test(l));
+  // 時刻のあとの部分で数える(「No.01  /  00:12:37  ～  00:16:16  /  曲名」の時刻の間の「/」は数えない)
+  const timed = lines.map((l, i) => readTimedLine(l, i)?.rest.replace(LEADING, '')).filter((r): r is string => !!r);
   const count = (sep: RegExp) => timed.filter((l) => l.match(sep)).length;
   return [...SEPARATORS].sort((a, b) => count(b) - count(a));
 }
