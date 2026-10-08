@@ -403,6 +403,93 @@ export async function getSetlist(db: D1Database, videoId: string): Promise<Setli
   return row ? { author: row.author, text: row.text } : null;
 }
 
+// ---------- セトリの点検 ----------
+
+export interface SetlistToAudit {
+  video_id: string;
+  comment_id: string | null;
+  text: string | null;
+  checked_at: string;
+  duration_sec: number | null;
+}
+
+/**
+ * 点検するセトリ。見つかったセトリと、あきらめた(7 日たっても見つからない)ものを、取得・確認してから
+ * まだ点検していない順に。まだ確認を続けているもの(見つかっていない・次の確認がある)は点検しない
+ */
+export async function findSetlistsToAudit(db: D1Database, limit: number) {
+  const { results } = await db
+    .prepare(
+      `SELECT s.video_id, s.comment_id, s.text, s.checked_at, v.duration_sec
+         FROM setlists s JOIN videos v ON v.id = s.video_id
+        WHERE (s.audited_at IS NULL OR s.audited_at < s.checked_at)
+          AND (s.text IS NOT NULL OR s.next_check_at IS NULL)
+        ORDER BY s.checked_at
+        LIMIT ?`,
+    )
+    .bind(limit)
+    .all<SetlistToAudit>();
+  return results;
+}
+
+/** 点検の結果を残す。問題が無ければ行を消し、同じ問題(目印が同じ)なら、知らせた日時はそのまま残す */
+export function saveSetlistAuditStmts(
+  db: D1Database,
+  r: { videoId: string; problems: unknown[]; signature: string; checkedAt: string; now: string },
+) {
+  const audited = db.prepare('UPDATE setlists SET audited_at = ? WHERE video_id = ?').bind(r.checkedAt, r.videoId);
+  if (r.problems.length === 0) {
+    return [db.prepare('DELETE FROM setlist_audits WHERE video_id = ?').bind(r.videoId), audited];
+  }
+  return [
+    db
+      .prepare(
+        `INSERT INTO setlist_audits (video_id, problems, signature, found_at, notified_at)
+         VALUES (?, ?, ?, ?, NULL)
+         ON CONFLICT (video_id) DO UPDATE SET
+           problems = excluded.problems,
+           signature = excluded.signature,
+           found_at = CASE WHEN signature = excluded.signature THEN found_at ELSE excluded.found_at END,
+           notified_at = CASE WHEN signature = excluded.signature THEN notified_at ELSE NULL END`,
+      )
+      .bind(r.videoId, JSON.stringify(r.problems), r.signature, r.now),
+    audited,
+  ];
+}
+
+export interface SetlistAuditToNotify {
+  video_id: string;
+  problems: string;
+  title: string;
+  channel_title: string;
+  event_at: string;
+  author: string | null;
+  text: string | null;
+}
+
+/** まだ知らせていない問題。since 以降にすでに知らせていれば(1 日 1 回まで)、何も返さない */
+export async function findSetlistAuditsToNotify(db: D1Database, since: string, limit: number) {
+  const { results } = await db
+    .prepare(
+      `SELECT a.video_id, a.problems, v.title, c.title AS channel_title, v.event_at, s.author, s.text
+         FROM setlist_audits a
+         JOIN videos v ON v.id = a.video_id
+         JOIN channels c ON c.id = v.channel_id
+         LEFT JOIN setlists s ON s.video_id = a.video_id
+        WHERE a.notified_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM setlist_audits WHERE notified_at >= ?)
+        ORDER BY v.event_at
+        LIMIT ?`,
+    )
+    .bind(since, limit)
+    .all<SetlistAuditToNotify>();
+  return results;
+}
+
+export function markSetlistAuditsNotifiedStmts(db: D1Database, videoIds: string[], now: string) {
+  return videoIds.map((id) => db.prepare('UPDATE setlist_audits SET notified_at = ? WHERE video_id = ?').bind(now, id));
+}
+
 // ---------- 再生リスト ----------
 
 interface PlaylistRow {

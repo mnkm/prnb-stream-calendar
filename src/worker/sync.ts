@@ -1,4 +1,5 @@
 import { countTimestamps } from '../shared/setlist';
+import { auditSetlist, problemSignature } from '../shared/setlist-audit';
 import type { LiveStatus } from '../shared/types';
 import { RequestBudget, countD1 } from './budget';
 import {
@@ -10,7 +11,9 @@ import {
   fillSearchTitles,
   findActiveLiveIds,
   findPendingPlaylist,
+  findSetlistAuditsToNotify,
   findSetlistTargets,
+  findSetlistsToAudit,
   findExistingVideoIds,
   listEnabledChannels,
   listPlaylistIds,
@@ -18,10 +21,12 @@ import {
   markMembersOnlyStmt,
   markPlaylistsSyncedStmt,
   markPremieresStmt,
+  markSetlistAuditsNotifiedStmts,
   markShortsStmt,
   playlistItemsPageStmts,
   saveBackfillProgress,
   saveMembersScanProgress,
+  saveSetlistAuditStmts,
   saveSetlistStmt,
   savePremieresScanProgress,
   updateChannelProfile,
@@ -29,6 +34,7 @@ import {
   upsertVideoStmts,
   writeBatch,
 } from './db';
+import { buildSetlistAuditIssue, createIssue } from './github';
 import { toIsoSeconds } from './time';
 import {
   RequestBudgetExceededError,
@@ -77,6 +83,12 @@ const SETLIST_CHECK_HOURS = [1, 6, 24, 72, 168];
 const SETLIST_COMMENTS = 20;
 /** セトリとみなすコメントに含まれるタイムスタンプの数 */
 const SETLIST_MIN_TIMESTAMPS = 3;
+/** 1 回の実行で点検するセトリの数(読み取りは 1 本 0.3ms ほど) */
+const SETLIST_AUDITS_PER_RUN = 20;
+/** セトリの点検の Issue を作る時刻(JST)。この時刻を過ぎた最初の実行で、1 日 1 回まで作る */
+const SETLIST_AUDIT_NOTIFY_HOUR_JST = 9;
+/** 1 つの Issue に載せる歌枠の数の上限(残りは次の日に回す) */
+const SETLIST_AUDITS_PER_ISSUE = 20;
 /** 再生リストの一覧を取り直す間隔 */
 const PLAYLISTS_REFRESH_MS = 24 * 60 * 60 * 1000;
 /** 1 回の実行で読む再生リストの中身のページ数(1 ページ = 50 件) */
@@ -87,6 +99,10 @@ const PROFILE_REFRESH_MS = 24 * 60 * 60 * 1000;
 export interface SyncEnv {
   DB: D1Database;
   YOUTUBE_API_KEY: string;
+  /** セトリの点検の Issue を作る GitHub のトークン(Issues の読み書き)。無ければ点検だけ行い、通知しない */
+  GITHUB_TOKEN?: string;
+  /** Issue を作るリポジトリ(owner/name) */
+  GITHUB_REPO?: string;
 }
 
 export interface ChannelSyncResult {
@@ -152,7 +168,15 @@ export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
     console.error('checkSetlists failed', err);
   }
 
-  // 4. 残りの予算で、再生リストの一覧(1 日 1 回)と、本数が変わった再生リストの中身を読む
+  // 4. 取得したセトリを点検し、問題があれば 1 日 1 回 GitHub の Issue で知らせる
+  try {
+    await auditSetlists(db, budget);
+    if (env.GITHUB_TOKEN && env.GITHUB_REPO) await notifySetlistAudits(db, budget, env.GITHUB_TOKEN, env.GITHUB_REPO);
+  } catch (err) {
+    console.error('setlist audit failed', err);
+  }
+
+  // 5. 残りの予算で、再生リストの一覧(1 日 1 回)と、本数が変わった再生リストの中身を読む
   try {
     await syncPlaylists(db, yt, budget, channels);
   } catch (err) {
@@ -439,6 +463,41 @@ function nextSetlistCheck(endedAt: string, now: Date): string | null {
   const ended = Date.parse(endedAt);
   const next = SETLIST_CHECK_HOURS.map((h) => ended + h * 3600_000).find((t) => t > now.getTime());
   return next === undefined ? null : toIsoSeconds(new Date(next));
+}
+
+/** 取得・確認してからまだ点検していないセトリを、表示と同じ読み取りで点検する(読み取り 1 回 + 書き込み 1 回) */
+async function auditSetlists(db: D1Database, budget: RequestBudget) {
+  if (budget.remaining < 2) return;
+  const rows = await findSetlistsToAudit(db, SETLIST_AUDITS_PER_RUN);
+  const now = toIsoSeconds(new Date());
+  const stmts = rows.flatMap((row) => {
+    const problems = auditSetlist(row.text, row.duration_sec);
+    return saveSetlistAuditStmts(db, {
+      videoId: row.video_id,
+      problems,
+      signature: problemSignature(row.comment_id, problems),
+      checkedAt: row.checked_at,
+      now,
+    });
+  });
+  await writeBatch(db, stmts);
+}
+
+/**
+ * まだ知らせていない問題を、1 つの Issue にまとめて知らせる。毎日 SETLIST_AUDIT_NOTIFY_HOUR_JST 時(JST)を過ぎてから、
+ * その日にまだ知らせていなければ作る(読み取り 1 回 + GitHub 1 回 + 書き込み 1 回)
+ */
+async function notifySetlistAudits(db: D1Database, budget: RequestBudget, token: string, repo: string) {
+  const now = new Date();
+  const jst = new Date(now.getTime() + 9 * 3600_000);
+  if (jst.getUTCHours() < SETLIST_AUDIT_NOTIFY_HOUR_JST || budget.remaining < 3) return;
+  // JST の今日の 0 時(UTC で表す)
+  const todayStart = new Date(Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth(), jst.getUTCDate()) - 9 * 3600_000);
+  const rows = await findSetlistAuditsToNotify(db, toIsoSeconds(todayStart), SETLIST_AUDITS_PER_ISSUE);
+  if (rows.length === 0) return;
+  const url = await createIssue(budget, token, repo, buildSetlistAuditIssue(rows, now));
+  console.log(`setlist audit issue created: ${url}`);
+  await writeBatch(db, markSetlistAuditsNotifiedStmts(db, rows.map((r) => r.video_id), toIsoSeconds(now)));
 }
 
 /**
