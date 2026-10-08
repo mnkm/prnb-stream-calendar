@@ -25,7 +25,12 @@
   "triggers": { "crons": ["*/5 * * * *"] },
 
   // セトリの点検で、問題が見つかったときに Issue を作るリポジトリ
-  "vars": { "GITHUB_REPO": "mnkm/prnb-youtube-calendar" }
+  "vars": { "GITHUB_REPO": "mnkm/prnb-youtube-calendar" },
+
+  // main 以外のブランチの push で Workers Builds が作るプレビュー(wrangler preview)の設定。
+  // Wrangler 4.147 からこの項目が無いとプレビューのビルドが失敗する。D1 などはプレビューに引き継がれないので、
+  // プレビューは本番のデータベースを読み書きしない(API は動かず、画面の確認だけに使える)
+  "previews": {}
 
   // シークレット(コミットしない):
   //   YOUTUBE_API_KEY … YouTube Data API v3 の API キー
