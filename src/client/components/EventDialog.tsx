@@ -1,10 +1,11 @@
 import { ArrowLeft, Clock, Crown, ExternalLink, Play, Timer } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { CalendarEvent, Channel } from '../../shared/types';
 import { formatDayHeading, formatDuration, formatEventWhen, watchUrl } from '../lib/format';
 import { LiveStatusBadge, MembersOnlyBadge, TypeBadge } from './Badges';
 import { EventRow } from './EventRow';
 import { Modal } from './Modal';
+import { SetlistSection } from './SetlistSection';
 import { Thumbnail } from './Thumbnail';
 
 export type DialogState =
@@ -48,13 +49,25 @@ export function EventDialog({ state, channelMap, showChannelColor, onChange }: P
   );
 }
 
+/** セトリを表示する配信: 配信が終わった歌枠(メンバー限定はコメントを読めないので除く) */
+const hasSetlist = (event: CalendarEvent) =>
+  event.type === 'live' && event.liveStatus === 'ended' && !event.membersOnly && event.title.includes('歌枠');
+
 function EventDetail({ event, onBack }: { event: CalendarEvent; onBack?: () => void }) {
-  const [playing, setPlaying] = useState(false);
+  // 再生を始める位置(秒)。null なら再生前(サムネイルを表示)
+  const [start, setStart] = useState<number | null>(null);
+  const playerRef = useRef<HTMLDivElement>(null);
   const duration = formatDuration(event.durationSec);
+
+  // セトリの時刻を押したら、その位置から再生し、プレーヤーが見えるところまで戻る
+  const seek = (seconds: number) => {
+    setStart(seconds);
+    playerRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
 
   return (
     <div>
-      <div className="relative aspect-video bg-black">
+      <div ref={playerRef} className="relative aspect-video bg-black">
         {event.membersOnly ? (
           // メンバー以外は埋め込み再生できないので、サムネイルだけ表示して YouTube に誘導する
           <div className="size-full">
@@ -64,16 +77,17 @@ function EventDetail({ event, onBack }: { event: CalendarEvent; onBack?: () => v
               メンバー限定のため、YouTube で視聴してください
             </span>
           </div>
-        ) : playing ? (
+        ) : start !== null ? (
           <iframe
+            key={start}
             className="size-full"
-            src={`https://www.youtube-nocookie.com/embed/${event.id}?autoplay=1`}
+            src={`https://www.youtube-nocookie.com/embed/${event.id}?autoplay=1&start=${start}`}
             title={event.title}
             allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
             allowFullScreen
           />
         ) : (
-          <button className="group size-full" onClick={() => setPlaying(true)} aria-label="ここで再生">
+          <button className="group size-full" onClick={() => setStart(0)} aria-label="ここで再生">
             <Thumbnail event={event} hd className="size-full" />
             <span className="absolute inset-0 grid place-items-center bg-gradient-to-t from-black/50 via-transparent to-transparent">
               <span className="grid size-16 place-items-center rounded-full bg-white/90 text-black shadow-xl transition group-hover:scale-110">
@@ -125,6 +139,7 @@ function EventDetail({ event, onBack }: { event: CalendarEvent; onBack?: () => v
             <ExternalLink className="size-4" />
           </a>
         </div>
+        {hasSetlist(event) && <SetlistSection videoId={event.id} onSeek={seek} />}
       </div>
     </div>
   );

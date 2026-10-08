@@ -1,3 +1,4 @@
+import { countTimestamps } from '../shared/setlist';
 import type { LiveStatus } from '../shared/types';
 import { RequestBudget, countD1 } from './budget';
 import {
@@ -7,6 +8,7 @@ import {
   deleteVideosStmt,
   fillSearchTitles,
   findActiveLiveIds,
+  findSetlistTargets,
   findExistingVideoIds,
   listEnabledChannels,
   markChannelSyncedStmt,
@@ -15,6 +17,7 @@ import {
   markShortsStmt,
   saveBackfillProgress,
   saveMembersScanProgress,
+  saveSetlistStmt,
   savePremieresScanProgress,
   updateChannelProfile,
   upsertVideoStmts,
@@ -25,6 +28,7 @@ import {
   RequestBudgetExceededError,
   SHORTS_MAX_DURATION_SEC,
   type YtChannel,
+  type YtComment,
   type YtVideo,
   YouTubeClient,
   membersPlaylistId,
@@ -59,6 +63,14 @@ const PAGE_REQUESTS = 3;
 const BACKFILL_PAGES_PER_RUN = 8;
 /** 1 回の実行で search_title を埋める件数 */
 const SEARCH_TITLE_FILL_PER_RUN = 1000;
+/** 1 回の実行でセトリを確認する歌枠の数(過去分の確認が多いあいだも、CPU 時間が増えすぎないように) */
+const SETLIST_CHECKS_PER_RUN = 10;
+/** セトリを確認する時刻(配信終了からの時間)。セトリのコメントは終了後しばらくして書かれることが多い */
+const SETLIST_CHECK_HOURS = [1, 6, 24, 72, 168];
+/** 関連性順で確認するコメントの数(固定コメントは先頭に来るが、固定されていないセトリも拾うため) */
+const SETLIST_COMMENTS = 20;
+/** セトリとみなすコメントに含まれるタイムスタンプの数 */
+const SETLIST_MIN_TIMESTAMPS = 3;
 /** チャンネルのプロフィール(説明・登録者数など)を取り直す間隔 */
 const PROFILE_REFRESH_MS = 24 * 60 * 60 * 1000;
 
@@ -121,6 +133,13 @@ export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
         return backfillStep(db, yt, budget, channel);
       }),
     );
+  }
+
+  // 3. 残りの予算で、配信が終わった歌枠のセトリを確認する
+  try {
+    await checkSetlists(db, yt, budget);
+  } catch (err) {
+    console.error('checkSetlists failed', err);
   }
 
   // 検索用の列を追加する前に登録した行を埋める(全部埋まっていれば読み取り 1 回だけ)
@@ -361,3 +380,46 @@ function toVideoRow(v: YtVideo, isShort: boolean, inVideosTab: boolean): VideoRo
 }
 
 const nowIso = () => toIsoSeconds(new Date());
+
+/**
+ * 歌枠のセトリを確認する。関連性順の上位コメントから、タイムスタンプを多く含む最初のものをセトリとして保存する。
+ * 見つからなければ、配信終了の 1・6・24 時間後、3・7 日後に確認し直し、7 日を過ぎたらあきらめる
+ */
+async function checkSetlists(db: D1Database, yt: YouTubeClient, budget: RequestBudget) {
+  // 対象の読み取り 1 回 + 書き込み 1 回 + 1 本以上の確認が入らなければ、次回に回す
+  if (budget.remaining < 4) return;
+  const now = new Date();
+  const notBefore = toIsoSeconds(new Date(now.getTime() - SETLIST_CHECK_HOURS[0] * 3600_000));
+  const targets = await findSetlistTargets(db, toIsoSeconds(now), notBefore, SETLIST_CHECKS_PER_RUN);
+
+  const stmts: D1PreparedStatement[] = [];
+  for (const target of targets) {
+    if (budget.remaining <= 1) break; // 最後の書き込みの分を残す
+    let comments: YtComment[] | null;
+    try {
+      comments = await yt.getTopComments(target.id, SETLIST_COMMENTS);
+    } catch (err) {
+      // クォータ超過などで続けられないときは、ここまでの結果だけ保存する
+      console.warn(`setlist check failed for ${target.id}`, err);
+      break;
+    }
+    const found = comments?.find((c) => countTimestamps(c.text) >= SETLIST_MIN_TIMESTAMPS) ?? null;
+    stmts.push(
+      saveSetlistStmt(db, {
+        videoId: target.id,
+        comment: found,
+        checkedAt: toIsoSeconds(now),
+        // コメントが無効な配信や、見つかった配信は、もう確認しない
+        nextCheckAt: found || comments === null ? null : nextSetlistCheck(target.ended_at, now),
+      }),
+    );
+  }
+  await writeBatch(db, stmts);
+}
+
+/** 次にセトリを確認する日時。配信終了から 7 日を過ぎていれば null(あきらめる) */
+function nextSetlistCheck(endedAt: string, now: Date): string | null {
+  const ended = Date.parse(endedAt);
+  const next = SETLIST_CHECK_HOURS.map((h) => ended + h * 3600_000).find((t) => t > now.getTime());
+  return next === undefined ? null : toIsoSeconds(new Date(next));
+}

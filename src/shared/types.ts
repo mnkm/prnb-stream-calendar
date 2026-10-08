@@ -41,3 +41,10 @@ export interface SearchPage {
   /** 種別ごとの一致件数(種別の絞り込み前)。最初のページだけに入る */
   counts?: Record<VideoType, number>;
 }
+
+/** 歌枠のセトリ(コメントの原文)。読み取りは src/shared/setlist.ts の parseSetlist で行う */
+export interface Setlist {
+  /** コメントを書いた人の表示名(@ から始まるハンドル) */
+  author: string;
+  text: string;
+}

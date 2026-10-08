@@ -40,6 +40,16 @@ export interface YtChannel {
   brandingSettings?: { image?: { bannerExternalUrl?: string } };
 }
 
+interface YtCommentThread {
+  snippet: { topLevelComment: { id: string; snippet: { authorDisplayName: string; textDisplay: string } } };
+}
+
+export interface YtComment {
+  id: string;
+  author: string;
+  text: string;
+}
+
 export interface PlaylistPage {
   ids: string[];
   nextPageToken?: string;
@@ -125,6 +135,32 @@ export class YouTubeClient {
       };
     } catch (err) {
       if (err instanceof YouTubeApiError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * 関連性順のコメント(返信は含まない)。1 unit。固定コメントがあれば先頭に来る。
+   * コメントが無効・動画が見つからない場合は null
+   */
+  async getTopComments(videoId: string, max: number): Promise<YtComment[] | null> {
+    try {
+      const data = await this.get<{ items?: YtCommentThread[] }>('commentThreads', {
+        part: 'snippet',
+        videoId,
+        order: 'relevance',
+        maxResults: String(max),
+        textFormat: 'plainText',
+      });
+      return (data.items ?? []).map((t) => ({
+        id: t.snippet.topLevelComment.id,
+        author: t.snippet.topLevelComment.snippet.authorDisplayName,
+        text: t.snippet.topLevelComment.snippet.textDisplay,
+      }));
+    } catch (err) {
+      // 403 はクォータ超過などでも返るので、コメントが無効な場合(commentsDisabled)だけを見分ける
+      const disabled = err instanceof YouTubeApiError && err.status === 403 && err.message.includes('commentsDisabled');
+      if (disabled || (err instanceof YouTubeApiError && err.status === 404)) return null;
       throw err;
     }
   }

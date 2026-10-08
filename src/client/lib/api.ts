@@ -1,5 +1,12 @@
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
-import { type CalendarEvent, type Channel, type SearchPage, VIDEO_TYPES, type VideoType } from '../../shared/types';
+import {
+  type CalendarEvent,
+  type Channel,
+  type SearchPage,
+  type Setlist,
+  VIDEO_TYPES,
+  type VideoType,
+} from '../../shared/types';
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path);
@@ -38,4 +45,17 @@ export const searchQuery = (q: string, types: VideoType[], channelIds: string[])
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.nextCursor,
     staleTime: 60_000,
+  });
+
+/** 歌枠のセトリ。まだ見つかっていなければ null */
+export const setlistQuery = (videoId: string) =>
+  queryOptions({
+    queryKey: ['setlist', videoId],
+    queryFn: async () => {
+      const res = await fetch(`/api/setlist/${encodeURIComponent(videoId)}`);
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`/api/setlist → ${res.status}`);
+      return (await res.json()) as Setlist;
+    },
+    staleTime: 5 * 60_000,
   });
