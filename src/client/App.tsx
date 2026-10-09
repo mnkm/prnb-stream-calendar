@@ -169,11 +169,7 @@ export default function App() {
     if (Math.abs(offset.x) < Math.abs(offset.y)) return;
     const far = Math.abs(offset.x) > SWIPE_DISTANCE_PX;
     const flick = Math.abs(offset.x) > SWIPE_MIN_DISTANCE_PX && Math.abs(velocity.x) > SWIPE_VELOCITY;
-    if (far || flick) {
-      shift(offset.x < 0 ? 1 : -1);
-      // 切り替えた先は先頭から見せる(リスト表示を下までスクロールしたあとでも、月の初めから表示する)
-      window.scrollTo({ top: 0 });
-    }
+    if (far || flick) shift(offset.x < 0 ? 1 : -1);
   };
 
   const openDay = (day: Date) => {
