@@ -6,6 +6,8 @@ export const VIDEO_TYPES: readonly VideoType[] = ['live', 'video', 'short'];
 export interface Channel {
   id: string;
   title: string;
+  /** 表示・非表示を切り替えるボタンに出す短いラベル(「公式」「💖💫」など)。null ならチャンネル名を出す */
+  label: string | null;
   iconUrl: string | null;
   color: string;
   description: string | null;

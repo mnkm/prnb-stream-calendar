@@ -99,7 +99,7 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 
 ### `channels`
 
-同期対象のチャンネル。`color`(複数チャンネル時の識別色)、`enabled`、プロフィール(`description` / `custom_url` / `banner_url` / `subscriber_count` / `video_count`、1 日 1 回更新)、過去分の取得の進み具合(`backfill_stage` / `backfill_page_token`)、一度だけ行う補正の進み具合(`premieres_*` / `members_*`)を持ちます。
+同期対象のチャンネル。`color`(複数チャンネル時の識別色)、`label`(表示・非表示ボタンに出す短いラベル)、`enabled`、プロフィール(`description` / `custom_url` / `banner_url` / `subscriber_count` / `video_count`、1 日 1 回更新)、過去分の取得の進み具合(`backfill_stage` / `backfill_page_token`)、一度だけ行う補正の進み具合(`premieres_*` / `members_*`)を持ちます。
 
 ## 同期の仕組み
 
@@ -323,6 +323,7 @@ npx wrangler triggers deploy  # Cron の設定だけを本番に反映する
 | `0007_setlists.sql` | 歌枠のセットリスト |
 | `0008_playlists.sql` | 再生リストとその中身 |
 | `0009_setlist_audits.sql` | セトリの点検の結果(既存のセトリは点検済みにする) |
+| `0010_channel_label.sql` | チャンネルの表示・非表示ボタンに出す短いラベル |
 
 ### チャンネルの追加
 
@@ -333,7 +334,7 @@ npx wrangler d1 execute prnb-youtube-calendar --remote \
   --command "INSERT INTO channels (id, color, sort_order) VALUES ('UCxxxxxxxxxxxxxxxxxxxxxx', '#f472b6', 1)"
 ```
 
-2 チャンネル以上になると、画面にチャンネルフィルターと色分けが自動で表示されます。`sort_order` が画面での並び順です。 `color` には CSS の色をそのまま書けます。`var(--ink)` を指定すると、ライトテーマでは黒、ダークテーマでは白になります。
+2 チャンネル以上になると、画面にチャンネルフィルターと色分けが自動で表示されます。`sort_order` が画面での並び順です。 `color` には CSS の色をそのまま書けます。`var(--ink)` を指定すると、ライトテーマでは黒、ダークテーマでは白になります。`label` を入れると、チャンネルの表示・非表示を切り替えるボタンにチャンネル名の代わりに表示します(例: `公式`、`💖💫`)。
 
 チャンネルを増やすと、各チャンネルの同期の間隔が延びます(無料プランでは「チャンネル数 ÷ 2 × 5 分」ごと)。また、YouTube API の 1 日の上限(10,000 ユニット)にも近づくので、10 チャンネルを超える場合は Workers Paid プランへの切り替えを検討してください。
 

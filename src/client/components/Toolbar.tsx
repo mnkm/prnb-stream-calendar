@@ -77,6 +77,8 @@ export function Toolbar(props: Props) {
                 <button
                   key={ch.id}
                   aria-pressed={on}
+                  aria-label={`${ch.title}を${on ? '表示中' : '非表示'}`}
+                  title={ch.title}
                   onClick={() => props.onToggleChannel(ch.id)}
                   className={clsx(
                     'flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-xs transition',
@@ -84,7 +86,7 @@ export function Toolbar(props: Props) {
                   )}
                 >
                   <span className="size-2 rounded-full" style={{ background: ch.color }} />
-                  <span className="max-w-40 truncate">{ch.title}</span>
+                  <span className="max-w-40 truncate">{ch.label ?? ch.title}</span>
                 </button>
               );
             })}

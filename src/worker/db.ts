@@ -28,6 +28,7 @@ export interface ChannelRow {
   banner_url: string | null;
   subscriber_count: number | null;
   video_count: number | null;
+  label: string | null;
   profile_updated_at: string | null;
   playlists_synced_at: string | null;
   premieres_page_token: string | null;
@@ -61,6 +62,7 @@ export function toChannel(row: ChannelRow): Channel {
   return {
     id: row.id,
     title: row.title,
+    label: row.label,
     iconUrl: row.icon_url,
     color: row.color,
     description: row.description,
