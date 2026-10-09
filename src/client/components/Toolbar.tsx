@@ -77,14 +77,17 @@ export function Toolbar(props: Props) {
                 <button
                   key={ch.id}
                   aria-pressed={on}
+                  aria-label={`${ch.title}を${on ? '表示中' : '非表示'}`}
+                  title={ch.title}
                   onClick={() => props.onToggleChannel(ch.id)}
                   className={clsx(
-                    'flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-xs transition',
+                    'relative flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-xs transition',
                     on ? 'bg-surface' : 'text-muted opacity-60',
                   )}
                 >
                   <span className="size-2 rounded-full" style={{ background: ch.color }} />
-                  <span className="max-w-40 truncate">{ch.title}</span>
+                  <span className="max-w-40 truncate">{ch.label ?? ch.title}</span>
+                  {!on && <OffSlash />}
                 </button>
               );
             })}
@@ -117,17 +120,36 @@ export function TypeFilters({
             aria-pressed={on}
             onClick={() => onToggle(type)}
             className={clsx(
-              'flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition',
-              on ? meta.toggleOn : 'border-line text-muted line-through decoration-1 hover:text-ink',
+              'relative flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition',
+              on ? meta.toggleOn : 'border-line text-muted hover:text-ink',
             )}
           >
             <Icon className="size-3.5" aria-hidden />
             {meta.label}
             <span className="tabular-nums opacity-70">{counts[type]}</span>
+            {!on && <OffSlash />}
           </button>
         );
       })}
     </div>
+  );
+}
+
+/** 表示・非表示ボタンが「非表示」のときに、ボタン全体に引く斜線(ラベルが絵文字だけでも非表示とわかるように) */
+function OffSlash() {
+  return (
+    <svg className="pointer-events-none absolute inset-0 size-full" preserveAspectRatio="none" aria-hidden>
+      <line
+        x1="10%"
+        y1="85%"
+        x2="90%"
+        y2="15%"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
   );
 }
 
