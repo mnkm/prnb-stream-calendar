@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { ArrowLeft, Crown, ExternalLink, ListVideo, Play } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import clsx from 'clsx';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CalendarEvent, Playlist } from '../../shared/types';
 import { channelPlaylistsQuery, playlistQuery, videoPlaylistsQuery } from '../lib/api';
 import { Thumbnail } from './Thumbnail';
@@ -12,6 +13,14 @@ const INITIAL_PLAYLISTS = 8;
 const ITEMS_PER_PAGE = 50;
 /** 一覧の最後がこの距離まで近づいたら、続きを表示する(検索結果と同じ) */
 const LOAD_MORE_MARGIN = '800px';
+
+/** 再生リストの中身の並び順。playlist = YouTube の再生リストの並び(作った人が決めた順) */
+type ItemOrder = 'playlist' | 'desc' | 'asc';
+const ORDER_OPTIONS: { value: ItemOrder; label: string }[] = [
+  { value: 'playlist', label: '再生リスト順' },
+  { value: 'desc', label: '新しい順' },
+  { value: 'asc', label: '古い順' },
+];
 
 /** いちばん近い縦スクロールの親(ダイアログの中身)。無ければ null(画面全体) */
 function scrollParent(el: HTMLElement): HTMLElement | null {
@@ -85,6 +94,16 @@ export function PlaylistDetailView({
 }) {
   const { data, isPending, isError } = useQuery(playlistQuery(playlistId));
   const [shown, setShown] = useState(ITEMS_PER_PAGE);
+  const [order, setOrder] = useState<ItemOrder>('playlist');
+  const events = useMemo(() => {
+    if (!data || order === 'playlist') return data?.events ?? [];
+    const sign = order === 'asc' ? 1 : -1;
+    return [...data.events].sort((a, b) => sign * a.eventAt.localeCompare(b.eventAt));
+  }, [data, order]);
+  const changeOrder = (next: ItemOrder) => {
+    setOrder(next);
+    setShown(ITEMS_PER_PAGE); // 並びを変えたら、先頭の 50 本から見せ直す
+  };
 
   // 一覧の最後の目印が見えてきたら、続きを表示する(中身はまとめて読み込み済みなので、表示する数を増やすだけ)
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -138,8 +157,26 @@ export function PlaylistDetailView({
             YouTube で再生リストを開く
             <ExternalLink className="size-4" />
           </a>
+          {data.events.length > 1 && (
+            <div role="radiogroup" aria-label="並び順" className="flex w-fit gap-1 self-end rounded-full border border-line p-1">
+              {ORDER_OPTIONS.map(({ value, label }) => (
+                <button
+                  key={value}
+                  role="radio"
+                  aria-checked={order === value}
+                  onClick={() => changeOrder(value)}
+                  className={clsx(
+                    'rounded-full px-3 py-1 text-xs font-medium whitespace-nowrap transition',
+                    order === value ? 'bg-ink text-canvas' : 'text-muted hover:text-ink',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           <ol className="flex flex-col">
-            {data.events.slice(0, shown).map((event, i) => (
+            {events.slice(0, shown).map((event, i) => (
               <li key={event.id} className="border-t border-line">
                 <button
                   onClick={() => onOpenEvent(event)}
