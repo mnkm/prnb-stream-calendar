@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { ArrowLeft, Crown, ExternalLink, ListVideo, Play } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CalendarEvent, Playlist } from '../../shared/types';
 import { channelPlaylistsQuery, playlistQuery, videoPlaylistsQuery } from '../lib/api';
 import { Thumbnail } from './Thumbnail';
@@ -10,6 +10,16 @@ import { Thumbnail } from './Thumbnail';
 const INITIAL_PLAYLISTS = 8;
 /** 再生リストの中身で、一度に見せる動画の数 */
 const ITEMS_PER_PAGE = 50;
+/** 一覧の最後がこの距離まで近づいたら、続きを表示する(検索結果と同じ) */
+const LOAD_MORE_MARGIN = '800px';
+
+/** いちばん近い縦スクロールの親(ダイアログの中身)。無ければ null(画面全体) */
+function scrollParent(el: HTMLElement): HTMLElement | null {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(p).overflowY)) return p;
+  }
+  return null;
+}
 
 const playlistUrl = (id: string) => `https://www.youtube.com/playlist?list=${encodeURIComponent(id)}`;
 
@@ -76,6 +86,20 @@ export function PlaylistDetailView({
   const { data, isPending, isError } = useQuery(playlistQuery(playlistId));
   const [shown, setShown] = useState(ITEMS_PER_PAGE);
 
+  // 一覧の最後の目印が見えてきたら、続きを表示する(中身はまとめて読み込み済みなので、表示する数を増やすだけ)
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const hasMore = !!data && data.events.length > shown;
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasMore) return;
+    const observer = new IntersectionObserver(
+      (entries) => entries[0]?.isIntersecting && setShown((n) => n + ITEMS_PER_PAGE),
+      { root: scrollParent(el), rootMargin: LOAD_MORE_MARGIN },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasMore, shown]);
+
   return (
     <div className="flex flex-col gap-4 p-5 pt-5">
       <button
@@ -136,13 +160,10 @@ export function PlaylistDetailView({
               </li>
             ))}
           </ol>
-          {data.events.length > shown && (
-            <button
-              onClick={() => setShown((n) => n + ITEMS_PER_PAGE)}
-              className="rounded-full border border-line py-2 text-sm font-medium transition hover:bg-ink/5"
-            >
-              さらに表示({shown} / {data.events.length}本)
-            </button>
+          {hasMore && (
+            <div ref={sentinelRef} className="py-3 text-center text-xs text-muted tabular-nums">
+              読み込み中…({shown} / {data.events.length}本)
+            </div>
           )}
         </>
       )}
