@@ -96,7 +96,7 @@ export function Toolbar(props: Props) {
                         x2="90%"
                         y2="15%"
                         stroke="currentColor"
-                        strokeWidth={1.5}
+                        strokeWidth={1} // 枠線(border の 1px)と同じ太さ
                         strokeLinecap="round"
                         vectorEffect="non-scaling-stroke"
                       />
