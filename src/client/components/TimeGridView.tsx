@@ -12,13 +12,14 @@ import { Thumbnail } from './Thumbnail';
 const HOUR_PX = 52;
 const MINUTE_MS = 60_000;
 const DAY_MIN = 24 * 60;
+/** 日付をまたぐ配信のために伸ばす時刻の上限(48 時 = 翌日の 24 時) */
+const MAX_GRID_MIN = 48 * 60;
 /** 動画・ショートは数分しかないので、ブロックが読める最小の長さ */
 const MIN_BLOCK_MIN = 25;
 /** 日表示はサムネイルを入れるので、最小の長さを大きくする */
 const DAY_VIEW_MIN_BLOCK_MIN = 60;
 /** 終了時刻が分からない配信予定の仮の長さ */
 const UPCOMING_LIVE_MIN = 60;
-const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
 interface Props {
   days: Date[];
@@ -41,7 +42,10 @@ interface Placed {
 
 const weekdayTone = (weekday: number) => (weekday === 0 ? 'text-sun' : weekday === 6 ? 'text-sat' : '');
 
-/** 週表示・日表示。0〜23 時を縦スクロールで表示し、予定を時刻の位置に置く */
+/**
+ * 週表示・日表示。0〜23 時を縦スクロールで表示し、予定を時刻の位置に置く。
+ * 予定は配信を始めた日の列にだけ置き、日付をまたぐ配信があれば 24 時以降(25:00 など)まで表示を伸ばす
+ */
 export function TimeGridView({ days, events, channelMap, showChannelColor, onSelectEvent, onSelectDay }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const now = useNow();
@@ -53,6 +57,9 @@ export function TimeGridView({ days, events, channelMap, showChannelColor, onSel
   );
   const showsToday = days.some((d) => isToday(d));
   const firstTop = Math.min(...columns.flatMap((c) => c.map((p) => p.top)));
+  // 表示する時刻の範囲。日付をまたぐ配信があれば、その終わりの時刻(1 時間単位に切り上げ)まで伸ばす
+  const gridMin = Math.max(DAY_MIN, ...columns.flatMap((c) => c.map((p) => Math.ceil((p.top + p.height) / 60) * 60)));
+  const hours = Array.from({ length: gridMin / 60 }, (_, h) => h);
   // 利用者が自分でスクロールしたら、それ以降は自動で動かさない
   const userScrolled = useRef(false);
   const markUserScrolled = () => {
@@ -118,10 +125,10 @@ export function TimeGridView({ days, events, channelMap, showChannelColor, onSel
           })}
         </div>
 
-        <div className="relative grid" style={{ ...gridCols, height: 24 * HOUR_PX }}>
-          {/* 時刻の目盛り */}
+        <div className="relative grid" style={{ ...gridCols, height: (gridMin / 60) * HOUR_PX }}>
+          {/* 時刻の目盛り(24 時以降は 24:00, 25:00 … と続ける) */}
           <div className="relative">
-            {HOURS.map((h) => (
+            {hours.map((h) => (
               <span
                 key={h}
                 className="absolute right-2 -translate-y-1/2 text-[10px] text-muted tabular-nums"
@@ -134,9 +141,19 @@ export function TimeGridView({ days, events, channelMap, showChannelColor, onSel
 
           {days.map((day, i) => {
             const today = isToday(day);
+            // 現在時刻の線。今日の列のほか、前の日の列の 24 時以降(配信を続けている時間帯)にも引く
+            const nowMin = (now.getTime() - day.getTime()) / MINUTE_MS;
             return (
               <div key={day.getTime()} className={clsx('relative border-l border-line', today && 'bg-ink/[0.02]')}>
-                {HOURS.map((h) => (
+                {gridMin > DAY_MIN && (
+                  // 24 時以降(翌日の時間帯)は少し色を付けて、日付が変わったことがわかるようにする
+                  <div
+                    className="absolute inset-x-0 bottom-0 border-t border-ink/20 bg-ink/[0.035]"
+                    style={{ top: 24 * HOUR_PX }}
+                    aria-hidden
+                  />
+                )}
+                {hours.map((h) => (
                   <div key={h} className="absolute inset-x-0 border-t border-line" style={{ top: h * HOUR_PX }} />
                 ))}
                 {columns[i].map((placed) => (
@@ -148,10 +165,10 @@ export function TimeGridView({ days, events, channelMap, showChannelColor, onSel
                     onClick={() => onSelectEvent(placed.event)}
                   />
                 ))}
-                {today && (
+                {nowMin >= 0 && nowMin < gridMin && (
                   <div
                     className="pointer-events-none absolute inset-x-0 z-10 flex items-center"
-                    style={{ top: (minutesOfDay(now) / 60) * HOUR_PX }}
+                    style={{ top: (nowMin / 60) * HOUR_PX }}
                     aria-hidden
                   >
                     <span className="-ml-1 size-2 rounded-full bg-live" />
@@ -221,30 +238,38 @@ function EventBlock({
   );
 }
 
-/** 予定の開始・終了。配信は実際の長さ、動画は動画の長さを使い、短すぎるものは最小の長さにそろえる */
-function eventSpan(event: CalendarEvent, now: Date, minBlock: number): { start: number; end: number } {
+/**
+ * 予定の開始・終了。配信は実際の長さ、動画は動画の長さを使い、短すぎるものは最小の長さにそろえる(end)。
+ * rawEnd はそろえる前の終わり(日付をまたぐかどうかの判定に使う)
+ */
+function eventSpan(event: CalendarEvent, now: Date, minBlock: number): { start: number; end: number; rawEnd: number } {
   const start = new Date(event.eventAt).getTime();
   let end: number;
   if (event.endedAt) end = new Date(event.endedAt).getTime();
   else if (event.liveStatus === 'live') end = Math.max(now.getTime(), start);
   else if (event.liveStatus === 'upcoming') end = start + UPCOMING_LIVE_MIN * MINUTE_MS;
   else end = start + (event.durationSec ?? 0) * 1000;
-  return { start, end: Math.max(end, start + minBlock * MINUTE_MS) };
+  return { start, end: Math.max(end, start + minBlock * MINUTE_MS), rawEnd: end };
 }
 
-/** 1 日分の予定を配置する。日付をまたぐ配信は両方の日に表示し、重なる予定は横に並べる */
+/**
+ * 1 日分の予定を配置する。その日に始まった予定だけを置き、日付をまたぐ配信は 24 時以降まで伸ばす。
+ * 重なる予定は横に並べる
+ */
 function layoutDay(day: Date, events: CalendarEvent[], now: Date, minBlock: number): Placed[] {
   const dayStart = day.getTime();
   const dayEnd = addDays(day, 1).getTime();
 
   const items = events
     .map((event) => ({ event, ...eventSpan(event, now, minBlock) }))
-    .filter(({ start, end }) => start < dayEnd && end > dayStart)
-    .map(({ event, start, end }) => {
-      const from = (Math.max(start, dayStart) - dayStart) / MINUTE_MS;
-      const to = (Math.min(end, dayEnd) - dayStart) / MINUTE_MS;
+    .filter(({ start }) => start >= dayStart && start < dayEnd)
+    .map(({ event, start, end, rawEnd }) => {
+      const from = (start - dayStart) / MINUTE_MS;
+      // 本当に日付をまたぐものだけ 24 時以降に伸ばす。23 時台の短い動画は、最小の高さのぶん上にずらして 24 時までに収める
+      const limit = rawEnd > dayEnd ? MAX_GRID_MIN : DAY_MIN;
+      const to = Math.min((end - dayStart) / MINUTE_MS, limit);
       const height = Math.max(to - from, minBlock);
-      return { event, top: Math.min(from, DAY_MIN - height), height };
+      return { event, top: Math.min(from, limit - height), height };
     })
     .sort((a, b) => a.top - b.top || b.height - a.height);
 
