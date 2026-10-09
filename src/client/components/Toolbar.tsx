@@ -135,7 +135,7 @@ export function TypeFilters({
   );
 }
 
-/** 表示・非表示ボタンが「非表示」のときに、ボタン全体に引く斜線(ラベルが絵文字だけでも非表示とわかるように) */
+/** 表示・非表示ボタンが「非表示」のときに、ボタン全体に引く斜線(取り消し線より目立ち、絵文字にも引けるように) */
 function OffSlash() {
   return (
     <svg className="pointer-events-none absolute inset-0 size-full" preserveAspectRatio="none" aria-hidden>
