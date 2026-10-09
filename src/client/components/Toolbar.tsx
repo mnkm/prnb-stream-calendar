@@ -81,12 +81,27 @@ export function Toolbar(props: Props) {
                   title={ch.title}
                   onClick={() => props.onToggleChannel(ch.id)}
                   className={clsx(
-                    'flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-xs transition',
+                    'relative flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-xs transition',
                     on ? 'bg-surface' : 'text-muted opacity-60',
                   )}
                 >
                   <span className="size-2 rounded-full" style={{ background: ch.color }} />
                   <span className="max-w-40 truncate">{ch.label ?? ch.title}</span>
+                  {/* 非表示のときは、ボタン全体に斜線を引く(ラベルが絵文字だけでも非表示とわかるように) */}
+                  {!on && (
+                    <svg className="pointer-events-none absolute inset-0 size-full" preserveAspectRatio="none" aria-hidden>
+                      <line
+                        x1="10%"
+                        y1="85%"
+                        x2="90%"
+                        y2="15%"
+                        stroke="currentColor"
+                        strokeWidth={1.5}
+                        strokeLinecap="round"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    </svg>
+                  )}
                 </button>
               );
             })}
