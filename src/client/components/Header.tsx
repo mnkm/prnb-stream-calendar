@@ -1,10 +1,10 @@
 import clsx from 'clsx';
-import { Calendar1, CalendarDays, CalendarRange, List, Monitor, Moon, Search, Sun, X } from 'lucide-react';
+import { Calendar1, CalendarDays, CalendarRange, List, Moon, Search, Sun, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { Channel } from '../../shared/types';
 import type { ViewMode } from '../lib/calendar';
-import { THEME_ORDER, type ThemePreference, useThemePreference } from '../lib/theme';
+import { type Theme, useTheme } from '../lib/theme';
 
 const VIEW_OPTIONS: { value: ViewMode; label: string; icon: typeof List }[] = [
   { value: 'month', label: '月', icon: CalendarDays },
@@ -13,8 +13,7 @@ const VIEW_OPTIONS: { value: ViewMode; label: string; icon: typeof List }[] = [
   { value: 'list', label: 'リスト', icon: List },
 ];
 
-const THEME_META: Record<ThemePreference, { label: string; icon: typeof Sun }> = {
-  system: { label: '自動(OS の設定)', icon: Monitor },
+const THEME_META: Record<Theme, { label: string; icon: typeof Sun }> = {
   light: { label: 'ライト', icon: Sun },
   dark: { label: 'ダーク', icon: Moon },
 };
@@ -83,17 +82,17 @@ export function Header({ channels, view, onViewChange, search, onOpenChannelList
   );
 }
 
-/** 押すたびに 自動 → ライト → ダーク の順に切り替える */
+/** ライトとダークを切り替える。最初は OS の設定に合わせたテーマを表示する */
 function ThemeToggle() {
-  const [pref, setPref] = useThemePreference();
-  const { label, icon: Icon } = THEME_META[pref];
-  const next = THEME_ORDER[(THEME_ORDER.indexOf(pref) + 1) % THEME_ORDER.length];
+  const [theme, toggle] = useTheme();
+  const { label, icon: Icon } = THEME_META[theme];
+  const next = theme === 'dark' ? 'light' : 'dark';
   return (
     <button
-      onClick={() => setPref(next)}
+      onClick={toggle}
       aria-label={`テーマ: ${label}(押すと${THEME_META[next].label}に切り替え)`}
       title={`テーマ: ${label}`}
-      // 幅 360px 未満の小さな画面では、ヘッダーに入りきらないので隠す(テーマは「自動」で表示される)
+      // 幅 360px 未満の小さな画面では、ヘッダーに入りきらないので隠す(テーマは OS の設定か、前に選んだもので表示される)
       className="grid size-8 shrink-0 place-items-center rounded-full border border-line bg-surface/80 text-muted transition hover:text-ink max-[359px]:hidden sm:size-9"
     >
       <Icon className="size-4" aria-hidden />
