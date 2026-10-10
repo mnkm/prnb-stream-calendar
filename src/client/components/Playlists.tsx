@@ -7,8 +7,6 @@ import type { CalendarEvent, Playlist } from '../../shared/types';
 import { channelPlaylistsQuery, playlistQuery, videoPlaylistsQuery } from '../lib/api';
 import { Thumbnail } from './Thumbnail';
 
-/** チャンネル情報で最初に見せる再生リストの数(残りは「すべて見る」で開く) */
-const INITIAL_PLAYLISTS = 8;
 /** 再生リストの中身で、一度に見せる動画の数 */
 const ITEMS_PER_PAGE = 50;
 /** 一覧の最後がこの距離まで近づいたら、続きを表示する(検索結果と同じ) */
@@ -32,19 +30,17 @@ function scrollParent(el: HTMLElement): HTMLElement | null {
 
 const playlistUrl = (id: string) => `https://www.youtube.com/playlist?list=${encodeURIComponent(id)}`;
 
-/** ① チャンネル情報の「再生リスト」タブ。おすすめを先頭に、2 列のカードで並べる */
+/** ① チャンネル情報の「再生リスト」タブ。おすすめを先頭に、2 列のカードで全件を並べる */
 export function PlaylistGrid({ channelId, onOpen }: { channelId: string; onOpen: (playlist: Playlist) => void }) {
   const { data: lists, isPending } = useQuery(channelPlaylistsQuery(channelId));
-  const [showAll, setShowAll] = useState(false);
 
   if (isPending) return <p className="py-6 text-center text-sm text-muted">読み込み中…</p>;
   if (!lists || lists.length === 0) return <p className="py-6 text-center text-sm text-muted">再生リストはありません</p>;
 
-  const visible = showAll ? lists : lists.slice(0, INITIAL_PLAYLISTS);
   return (
     <div className="flex flex-col gap-3">
       <ul className="grid grid-cols-2 gap-x-3 gap-y-4">
-        {visible.map((p) => (
+        {lists.map((p) => (
           <li key={p.id}>
             <button onClick={() => onOpen(p)} className="group flex w-full flex-col gap-1.5 text-left">
               <span className="relative block aspect-video overflow-hidden rounded-xl bg-ink/5">
@@ -68,14 +64,6 @@ export function PlaylistGrid({ channelId, onOpen }: { channelId: string; onOpen:
           </li>
         ))}
       </ul>
-      {!showAll && lists.length > INITIAL_PLAYLISTS && (
-        <button
-          onClick={() => setShowAll(true)}
-          className="rounded-full border border-line py-2 text-sm font-medium transition hover:bg-ink/5"
-        >
-          すべての再生リスト({lists.length})を見る
-        </button>
-      )}
     </div>
   );
 }
