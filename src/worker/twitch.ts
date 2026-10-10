@@ -166,6 +166,15 @@ export class TwitchClient {
     };
   }
 
+  /** 渡したクリップのうち、今もあるものの ID(削除されたクリップは返ってこない)。100 件まで */
+  async getExistingClipIds(ids: string[]): Promise<Set<string>> {
+    const data = await this.get<{ data: { id: string }[] }>('clips', [
+      ...ids.map((id): [string, string] => ['id', id]),
+      ['first', '100'],
+    ]);
+    return new Set(data.data.map((c) => c.id));
+  }
+
   /**
    * クリップを再生数の多い順に 100 件。startedAt を渡すと、その日時から 1 週間に作られたものだけ、
    * 渡さなければ全期間。cursor は続きを取るときに after に渡す値(最後なら null)

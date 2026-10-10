@@ -21,6 +21,7 @@ export interface YtVideo {
     thumbnails: Partial<Record<'default' | 'medium' | 'high' | 'standard' | 'maxres', YtThumbnail>>;
   };
   contentDetails?: { duration?: string };
+  status?: { privacyStatus?: 'public' | 'unlisted' | 'private' };
   liveStreamingDetails?: {
     scheduledStartTime?: string;
     actualStartTime?: string;
@@ -246,7 +247,7 @@ export class YouTubeClient {
     const videos: YtVideo[] = [];
     for (let i = 0; i < ids.length; i += 50) {
       const data = await this.get<{ items?: YtVideo[] }>('videos', {
-        part: 'snippet,contentDetails,liveStreamingDetails',
+        part: 'snippet,contentDetails,liveStreamingDetails,status',
         id: ids.slice(i, i + 50).join(','),
         maxResults: '50',
       });

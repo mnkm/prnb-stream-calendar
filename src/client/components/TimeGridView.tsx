@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CalendarEvent, Channel } from '../../shared/types';
 import { formatTime } from '../lib/format';
 import { TYPE_META } from '../lib/meta';
-import { LiveDot, TwitchMark } from './Badges';
+import { AvailabilityMark, LiveDot, TwitchMark } from './Badges';
 import { Thumbnail } from './Thumbnail';
 
 const HOUR_PX = 52;
@@ -218,6 +218,7 @@ function EventBlock({
           meta.chip,
           event.liveStatus === 'upcoming' && 'border border-dashed border-live/50',
           event.liveStatus === 'live' && 'ring-1 ring-live ring-inset',
+          event.unavailableAt && 'opacity-50',
         )}
       >
         {dayView && <Thumbnail event={event} className="aspect-video h-full max-h-28 max-w-[40%] shrink-0 rounded-md" />}
@@ -229,6 +230,7 @@ function EventBlock({
             </span>
             {event.platform === 'twitch' && <TwitchMark />}
             {event.membersOnly && <Crown className="size-3 shrink-0 text-member" aria-label="メンバー限定" />}
+            <AvailabilityMark event={event} />
           </div>
           <p className={clsx('font-medium break-all text-ink/85', dayView ? 'line-clamp-2 text-xs' : 'line-clamp-3')}>
             {event.title}

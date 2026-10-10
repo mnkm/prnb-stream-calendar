@@ -68,6 +68,8 @@ interface StoredVideoRow extends VideoRow {
   members_only: number;
   platform: Platform;
   twitch_video_id: string | null;
+  unavailable_at: string | null;
+  unlisted: number;
 }
 
 const placeholders = (n: number) => Array.from({ length: n }, () => '?').join(',');
@@ -97,6 +99,8 @@ function toEvent(row: StoredVideoRow): CalendarEvent {
     channelId: row.channel_id,
     platform: row.platform,
     twitchVideoId: row.twitch_video_id,
+    unavailableAt: row.unavailable_at,
+    unlisted: row.unlisted === 1,
     type: row.type,
     liveStatus: isLive ? row.live_status : null,
     title: row.title,
@@ -203,12 +207,80 @@ export async function findExistingVideoIds(db: D1Database, ids: string[]): Promi
 }
 
 /** 状態が変わりうる YouTube のライブ(予定・配信中)の ID。Twitch の配信は videos.list に返ってこないので含めない */
-export async function findActiveLiveIds(db: D1Database, channelId: string): Promise<string[]> {
+export async function findActiveLives(db: D1Database, channelId: string) {
   const { results } = await db
-    .prepare(`SELECT id FROM videos WHERE channel_id = ? AND platform = 'youtube' AND live_status IN ('upcoming', 'live')`)
+    .prepare(
+      `SELECT id, live_status FROM videos
+        WHERE channel_id = ? AND platform = 'youtube' AND live_status IN ('upcoming', 'live')`,
+    )
     .bind(channelId)
-    .all<{ id: string }>();
-  return results.map((r) => r.id);
+    .all<{ id: string; live_status: 'upcoming' | 'live' }>();
+  return results;
+}
+
+/**
+ * 配信中に返ってこなくなった(配信のあとすぐ非公開・削除された)配信を、記録を残して再生できないものにする。
+ * 再び公開されたら、再生できるかの確認(checkAvailability)で元に戻る
+ */
+export function markVanishedLivesStmt(db: D1Database, ids: string[], now: string) {
+  if (ids.length === 0) return null;
+  return db
+    .prepare(
+      `UPDATE videos
+          SET live_status = 'ended', ended_at = COALESCE(ended_at, ?1), unavailable_at = ?1, missing_count = 2,
+              availability_checked_at = ?1, updated_at = ?1
+        WHERE id IN (${ids.map((_, i) => `?${i + 2}`).join(',')})`,
+    )
+    .bind(now, ...ids);
+}
+
+/** 再生できるかを確認する YouTube の動画。まだ確認していないもの、最後の確認が before より前のものを、古い順に */
+export async function findAvailabilityTargets(db: D1Database, before: string, limit: number) {
+  const { results } = await db
+    .prepare(
+      `SELECT id, unavailable_at FROM videos
+        WHERE platform = 'youtube' AND (live_status IS NULL OR live_status = 'ended')
+          AND (availability_checked_at IS NULL OR availability_checked_at < ?)
+        ORDER BY availability_checked_at
+        LIMIT ?`,
+    )
+    .bind(before, limit)
+    .all<{ id: string; unavailable_at: string | null }>();
+  return results;
+}
+
+/**
+ * 再生できるかの確認の結果を残す。返ってきたものは再生できる(限定公開かどうかも残す)。
+ * 返ってこなかったものは、2 回続いたら再生できないとみなす。1 回目は確認した日時を進めず、次の実行でもう一度確認する
+ */
+export function availabilityStmts(
+  db: D1Database,
+  r: { publicIds: string[]; unlistedIds: string[]; missingIds: string[] },
+  now: string,
+): (D1PreparedStatement | null)[] {
+  const found = (ids: string[], unlisted: number) =>
+    ids.length === 0
+      ? null
+      : db
+          .prepare(
+            `UPDATE videos
+                SET unavailable_at = NULL, missing_count = 0, unlisted = ?1, availability_checked_at = ?2
+              WHERE id IN (${ids.map((_, i) => `?${i + 3}`).join(',')})`,
+          )
+          .bind(unlisted, now, ...ids);
+  const missing =
+    r.missingIds.length === 0
+      ? null
+      : db
+          .prepare(
+            `UPDATE videos
+                SET missing_count = missing_count + 1,
+                    unavailable_at = CASE WHEN missing_count >= 1 THEN COALESCE(unavailable_at, ?1) ELSE unavailable_at END,
+                    availability_checked_at = CASE WHEN missing_count >= 1 THEN ?1 ELSE availability_checked_at END
+              WHERE id IN (${r.missingIds.map((_, i) => `?${i + 2}`).join(',')})`,
+          )
+          .bind(now, ...r.missingIds);
+  return [found(r.publicIds, 0), found(r.unlistedIds, 1), missing];
 }
 
 export function upsertVideoStmts(db: D1Database, rows: VideoRow[], now: string): D1PreparedStatement[] {
@@ -660,18 +732,53 @@ export interface TwitchState {
   token: { access_token: string; expires_at: string } | null;
   /** 配信中として登録されている Twitch の配信 */
   activeLives: { id: string; channel_id: string }[];
+  /** 今もあるかを確認するクリップの ID(まだ確認していないもの、最後の確認が古いものから順に) */
+  clipIdsToCheck: string[];
 }
 
-/** Twitch の同期の前に必要なものを 1 回の batch で読む */
-export async function readTwitchState(db: D1Database): Promise<TwitchState> {
-  const [token, lives] = await db.batch<Record<string, string>>([
+/**
+ * Twitch の同期の前に必要なものを 1 回の batch で読む。
+ * クリップは、最後の確認が clipsCheckedBefore より前のものを clipsLimit 件まで
+ */
+export async function readTwitchState(db: D1Database, clipsCheckedBefore: string, clipsLimit: number): Promise<TwitchState> {
+  const [token, lives, clips] = await db.batch<Record<string, string>>([
     db.prepare('SELECT access_token, expires_at FROM twitch_auth WHERE id = 1'),
     db.prepare(`SELECT id, channel_id FROM videos WHERE platform = 'twitch' AND live_status = 'live'`),
+    db
+      .prepare('SELECT id FROM twitch_clips WHERE checked_at IS NULL OR checked_at < ? ORDER BY checked_at LIMIT ?')
+      .bind(clipsCheckedBefore, clipsLimit),
   ]);
   return {
     token: (token.results[0] as TwitchState['token'] | undefined) ?? null,
     activeLives: lives.results as TwitchState['activeLives'],
+    clipIdsToCheck: clips.results.map((r) => r.id),
   };
+}
+
+/**
+ * クリップが今もあるかの確認の結果を残す。返ってこなかったものは、2 回続いたら一覧から外す(行を消す)。
+ * 1 回目は確認した日時を進めず、次の実行でもう一度確認する
+ */
+export function twitchClipCheckStmts(db: D1Database, foundIds: string[], missingIds: string[], now: string) {
+  const stmts: D1PreparedStatement[] = [];
+  if (foundIds.length > 0) {
+    stmts.push(
+      db
+        .prepare(
+          `UPDATE twitch_clips SET missing_count = 0, checked_at = ?1
+            WHERE id IN (${foundIds.map((_, i) => `?${i + 2}`).join(',')})`,
+        )
+        .bind(now, ...foundIds),
+    );
+  }
+  if (missingIds.length > 0) {
+    const list = placeholders(missingIds.length);
+    stmts.push(
+      db.prepare(`DELETE FROM twitch_clips WHERE missing_count >= 1 AND id IN (${list})`).bind(...missingIds),
+      db.prepare(`UPDATE twitch_clips SET missing_count = missing_count + 1 WHERE id IN (${list})`).bind(...missingIds),
+    );
+  }
+  return stmts;
 }
 
 export function saveTwitchTokenStmt(db: D1Database, accessToken: string, expiresAt: string) {
@@ -769,8 +876,10 @@ export function upsertTwitchArchiveStmts(db: D1Database, rows: TwitchArchiveRow[
        duration_sec    = excluded.duration_sec,
        ended_at        = excluded.ended_at,
        twitch_video_id = excluded.twitch_video_id,
+       unavailable_at  = NULL,
        updated_at      = excluded.updated_at
      WHERE videos.live_status IS NOT 'ended'
+        OR videos.unavailable_at IS NOT NULL
         OR videos.title IS NOT excluded.title
         OR videos.duration_sec IS NOT excluded.duration_sec
         OR videos.twitch_video_id IS NOT excluded.twitch_video_id
@@ -784,16 +893,18 @@ export function upsertTwitchArchiveStmts(db: D1Database, rows: TwitchArchiveRow[
   );
 }
 
-/** 公開が終わった(一覧から消えた)アーカイブの動画 ID を外す。カレンダーの記録は残す */
-export function clearExpiredTwitchArchivesStmt(db: D1Database, channelId: string, currentVideoIds: string[]) {
+/**
+ * 公開が終わった(一覧から消えた)アーカイブの動画 ID を外し、再生できなくなったことを残す。カレンダーの記録は残す
+ */
+export function clearExpiredTwitchArchivesStmt(db: D1Database, channelId: string, currentVideoIds: string[], now: string) {
   const notCurrent =
     currentVideoIds.length > 0 ? `AND twitch_video_id NOT IN (${placeholders(currentVideoIds.length)})` : '';
   return db
     .prepare(
-      `UPDATE videos SET twitch_video_id = NULL
+      `UPDATE videos SET twitch_video_id = NULL, unavailable_at = ?
         WHERE channel_id = ? AND platform = 'twitch' AND twitch_video_id IS NOT NULL ${notCurrent}`,
     )
-    .bind(channelId, ...currentVideoIds);
+    .bind(now, channelId, ...currentVideoIds);
 }
 
 /** Twitch のチャンネルの同期の結果を残す。profile は 1 日 1 回の確認をしたときだけ渡す */

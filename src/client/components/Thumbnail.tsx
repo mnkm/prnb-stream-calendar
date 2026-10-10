@@ -6,7 +6,11 @@ import type { CalendarEvent } from '../../shared/types';
 export function Thumbnail({ event, hd = false, className }: { event: CalendarEvent; hd?: boolean; className?: string }) {
   // ライブ中・予定のサムネイルは maxres が用意されないことが多いので API の URL を使う。Twitch も API の URL だけを使う
   const preferHd =
-    hd && event.platform === 'youtube' && event.liveStatus !== 'live' && event.liveStatus !== 'upcoming';
+    hd &&
+    event.platform === 'youtube' &&
+    !event.unavailableAt &&
+    event.liveStatus !== 'live' &&
+    event.liveStatus !== 'upcoming';
   const [src, setSrc] = useState(
     preferHd ? `https://i.ytimg.com/vi/${event.id}/maxresdefault.jpg` : (event.thumbnailUrl ?? ''),
   );

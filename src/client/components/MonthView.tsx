@@ -5,7 +5,7 @@ import type { CalendarEvent, Channel } from '../../shared/types';
 import { WEEKDAY_LABELS, dayKey } from '../lib/calendar';
 import { formatDayHeading, formatTime } from '../lib/format';
 import { TYPE_META } from '../lib/meta';
-import { LiveDot, TwitchMark } from './Badges';
+import { AvailabilityMark, LiveDot, TwitchMark } from './Badges';
 
 const MAX_CHIPS = 3;
 const MAX_DOTS = 4;
@@ -122,12 +122,14 @@ function EventChip({
         meta.chip,
         event.liveStatus === 'upcoming' && 'border border-dashed border-live/50 bg-transparent',
         event.liveStatus === 'live' && 'ring-1 ring-live',
+        event.unavailableAt && 'opacity-50',
       )}
     >
       {event.liveStatus === 'live' ? <LiveDot /> : <Icon className="size-3 shrink-0" aria-hidden />}
       <span className="shrink-0 tabular-nums opacity-75">{formatTime(event.eventAt)}</span>
       {event.platform === 'twitch' && <TwitchMark />}
       {event.membersOnly && <Crown className="size-3 shrink-0 text-member" aria-label="メンバー限定" />}
+      <AvailabilityMark event={event} />
       <span className="truncate font-medium text-ink/85">{event.title}</span>
     </button>
   );

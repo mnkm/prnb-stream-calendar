@@ -1,10 +1,11 @@
-import { ArrowLeft, Clock, Crown, ExternalLink, Play, Timer } from 'lucide-react';
+import { format } from 'date-fns';
+import { ArrowLeft, Clock, Crown, ExternalLink, EyeOff, Play, Timer } from 'lucide-react';
 import { useCallback, useRef, useState } from 'react';
 import type { CalendarEvent, Channel, Clip, Playlist } from '../../shared/types';
 import { EventClips, clipEmbedUrl } from './Clips';
 import type { ChannelDialogState } from './ChannelDialog';
 import { formatDayHeading, formatDuration, formatEventWhen, watchUrl } from '../lib/format';
-import { LiveStatusBadge, MembersOnlyBadge, PlatformBadge, TypeBadge } from './Badges';
+import { AvailabilityBadge, LiveStatusBadge, MembersOnlyBadge, PlatformBadge, TypeBadge } from './Badges';
 import { EventRow } from './EventRow';
 import { Modal } from './Modal';
 import { VideoPlaylists } from './Playlists';
@@ -143,6 +144,18 @@ function EventDetail({
             allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
             allowFullScreen
           />
+        ) : event.unavailableAt ? (
+          // 取り込んだあとに非公開・削除された動画や、公開が終わったアーカイブ。記録だけ残っている
+          <div className="size-full">
+            <Thumbnail event={event} className="size-full opacity-40" />
+            <span className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center text-white">
+              <EyeOff className="size-8" aria-hidden />
+              <span className="text-sm font-semibold">この動画は再生できません</span>
+              <span className="text-xs text-white/75">
+                {format(new Date(event.unavailableAt), 'yyyy年M月d日')}に確認
+              </span>
+            </span>
+          </div>
         ) : event.membersOnly ? (
           // メンバー以外は埋め込み再生できないので、サムネイルだけ表示して YouTube に誘導する
           <div className="size-full">
@@ -153,7 +166,7 @@ function EventDetail({
             </span>
           </div>
         ) : !playable ? (
-          // Twitch のアーカイブは、保存されていない場合や、保存期間を過ぎて公開が終わった場合がある
+          // Twitch のアーカイブが最初から保存されていない配信(配信中に取り込んだ記録だけがある)
           <div className="size-full">
             <Thumbnail event={event} hd className="size-full" />
             <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-4 pt-8 pb-3 text-xs font-medium text-white">
@@ -187,6 +200,7 @@ function EventDetail({
           <LiveStatusBadge event={event} />
           <PlatformBadge event={event} />
           <MembersOnlyBadge event={event} />
+          <AvailabilityBadge event={event} />
         </div>
         <h2 className="text-lg leading-snug font-semibold">{event.title}</h2>
         <dl className="grid gap-2 text-sm text-muted">
