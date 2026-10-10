@@ -60,6 +60,8 @@
   --color-short: oklch(0.72 0.17 55);
   /* メンバー限定 */
   --color-member: oklch(0.62 0.15 160);
+  /* Twitch の配信 */
+  --color-twitch: oklch(0.6 0.23 295);
 }
 
 body {

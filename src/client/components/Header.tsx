@@ -195,7 +195,7 @@ function ViewTabs({ view, onViewChange }: { view: ViewMode; onViewChange: (view:
  * YouTube のアイコン。ほかのボタン(lucide)と同じ線のアイコンにそろえる。
  * 今の lucide にはブランドのアイコンが無いため、以前の lucide の youtube アイコン(ISC ライセンス)の形を使う
  */
-function YouTubeIcon({ className }: { className?: string }) {
+export function YouTubeIcon({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"

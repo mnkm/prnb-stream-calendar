@@ -1,7 +1,11 @@
 import clsx from 'clsx';
-import { ArrowLeft, ChevronRight, ExternalLink } from 'lucide-react';
+import { ArrowLeft, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 import type { CalendarEvent, Channel } from '../../shared/types';
+import { twitchChannelUrl } from '../lib/format';
+import { TwitchIcon } from './Badges';
+import { ChannelClips } from './Clips';
+import { YouTubeIcon } from './Header';
 import { Modal } from './Modal';
 import { PlaylistDetailView, PlaylistGrid } from './Playlists';
 
@@ -94,13 +98,20 @@ function ChannelProfile({
   onOpenPlaylist: (playlist: { id: string }) => void;
 }) {
   // 再生リストを先に見せる(説明文などは「チャンネル情報」タブ)
-  const [tab, setTab] = useState<'playlists' | 'about'>('playlists');
+  const [tab, setTab] = useState<'playlists' | 'clips' | 'about'>('playlists');
+  // 「クリップ」タブは、Twitch にもチャンネルがある場合だけ出す
+  const tabs = [
+    ['playlists', '再生リスト'],
+    ...(channel.twitchLogin ? ([['clips', 'クリップ']] as const) : []),
+    ['about', 'チャンネル情報'],
+  ] as const;
   const channelUrl = channel.customUrl
     ? `https://www.youtube.com/${channel.customUrl}`
     : `https://www.youtube.com/channel/${channel.id}`;
   const stats = [
     channel.subscriberCount !== null && `登録者 ${compactNumber.format(channel.subscriberCount)}人`,
     channel.videoCount !== null && `動画 ${channel.videoCount.toLocaleString()}本`,
+    channel.twitchFollowerCount !== null && `Twitch フォロワー ${compactNumber.format(channel.twitchFollowerCount)}人`,
   ].filter(Boolean);
 
   return (
@@ -118,6 +129,15 @@ function ChannelProfile({
       <div className="flex flex-col gap-4 px-5 pb-5">
         <div className="-mt-10 flex items-end gap-3">
           <ChannelIcon channel={channel} className="size-20 ring-4 ring-surface" />
+          {onBack && (
+            <button
+              onClick={onBack}
+              className="ml-auto flex items-center gap-1.5 rounded-full border border-line px-3.5 py-2 text-sm font-medium transition hover:bg-ink/5"
+            >
+              <ArrowLeft className="size-4" />
+              一覧
+            </button>
+          )}
         </div>
 
         <div className="flex flex-col gap-1">
@@ -132,13 +152,32 @@ function ChannelProfile({
           </p>
         </div>
 
+        {/* 一覧が長くても押せるよう、タブの上に置く。2 つあるときは同じ幅で並べる */}
+        <div className={clsx('grid gap-2', channel.twitchLogin && 'grid-cols-2')}>
+          <a
+            href={channelUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center justify-center gap-1.5 rounded-full bg-ink px-3 py-2.5 text-sm font-medium whitespace-nowrap text-canvas transition hover:opacity-90"
+          >
+            <YouTubeIcon className="size-4 shrink-0" />
+            YouTube で開く
+          </a>
+          {channel.twitchLogin && (
+            <a
+              href={twitchChannelUrl(channel.twitchLogin)}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center justify-center gap-1.5 rounded-full bg-twitch px-3 py-2.5 text-sm font-medium whitespace-nowrap text-white transition hover:opacity-90"
+            >
+              <TwitchIcon className="size-4 shrink-0" />
+              Twitch で開く
+            </a>
+          )}
+        </div>
+
         <div role="tablist" aria-label="チャンネルの表示" className="flex gap-1 border-b border-line">
-          {(
-            [
-              ['playlists', '再生リスト'],
-              ['about', 'チャンネル情報'],
-            ] as const
-          ).map(([value, label]) => (
+          {tabs.map(([value, label]) => (
             <button
               key={value}
               role="tab"
@@ -156,6 +195,8 @@ function ChannelProfile({
 
         {tab === 'playlists' ? (
           <PlaylistGrid channelId={channel.id} onOpen={onOpenPlaylist} />
+        ) : tab === 'clips' ? (
+          <ChannelClips channelId={channel.id} />
         ) : channel.description ? (
           <p className="text-sm leading-relaxed break-words whitespace-pre-line text-ink/85">
             <Linkify text={channel.description} />
@@ -164,26 +205,6 @@ function ChannelProfile({
           <p className="text-sm text-muted">チャンネルの説明はまだありません。</p>
         )}
 
-        <div className="flex gap-2">
-          {onBack && (
-            <button
-              onClick={onBack}
-              className="flex items-center gap-1.5 rounded-full border border-line px-4 py-2.5 text-sm font-medium transition hover:bg-ink/5"
-            >
-              <ArrowLeft className="size-4" />
-              一覧
-            </button>
-          )}
-          <a
-            href={channelUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-full bg-ink px-4 py-2.5 text-sm font-medium text-canvas transition hover:opacity-90"
-          >
-            YouTube でチャンネルを開く
-            <ExternalLink className="size-4" />
-          </a>
-        </div>
       </div>
     </div>
   );

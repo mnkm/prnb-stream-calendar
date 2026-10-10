@@ -35,5 +35,6 @@
   // シークレット(コミットしない):
   //   YOUTUBE_API_KEY … YouTube Data API v3 の API キー
   //   ADMIN_TOKEN     … POST /api/admin/sync 用のトークン
+  //   TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET … Twitch のアプリの Client ID と Client Secret。無ければ Twitch は同期しない
   //   GITHUB_TOKEN    … セトリの点検の Issue を作るトークン(このリポジトリの Issues の読み書きだけを許可)。無ければ通知しない
 }

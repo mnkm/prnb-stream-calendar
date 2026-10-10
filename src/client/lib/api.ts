@@ -2,6 +2,9 @@ import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import {
   type CalendarEvent,
   type Channel,
+  type Clip,
+  type ClipPage,
+  type ClipSort,
   type Playlist,
   type PlaylistDetail,
   type SearchPage,
@@ -77,6 +80,25 @@ export const playlistQuery = (playlistId: string) =>
   queryOptions({
     queryKey: ['playlist', playlistId],
     queryFn: () => getJson<PlaylistDetail>(`/api/playlists/${enc(playlistId)}`),
+    staleTime: 5 * 60_000,
+  });
+
+/** Twitch の配信に結び付いたクリップ(再生数の多い順) */
+export const eventClipsQuery = (eventId: string) =>
+  queryOptions({
+    queryKey: ['event-clips', eventId],
+    queryFn: () => getJson<Clip[]>(`/api/videos/${enc(eventId)}/clips`),
+    staleTime: 5 * 60_000,
+  });
+
+/** チャンネルの Twitch のクリップ。30 件ずつ取り、続きは前のページの nextOffset で取る */
+export const channelClipsQuery = (channelId: string, sort: ClipSort) =>
+  infiniteQueryOptions({
+    queryKey: ['channel-clips', channelId, sort],
+    queryFn: ({ pageParam }) =>
+      getJson<ClipPage>(`/api/channels/${enc(channelId)}/clips?${new URLSearchParams({ sort, offset: String(pageParam) })}`),
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.nextOffset,
     staleTime: 5 * 60_000,
   });
 

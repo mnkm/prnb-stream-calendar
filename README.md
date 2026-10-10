@@ -27,6 +27,8 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 | テーマ | 最初は OS の設定に合わせたライト / ダークで表示し、ヘッダーのボタンでライトとダークを切り替え |
 | チャンネル情報 | ヘッダー右端の YouTube ボタンでチャンネル一覧を開き、各チャンネルのバナー・@ハンドル・登録者数・動画数を表示。「再生リスト」と「チャンネル情報」(説明文、URL はリンク)のタブで切り替える |
 | 再生リスト | チャンネルの再生リストをカードで表示(おすすめ系を先頭、残りは最近動画が追加された順)。押すと中身の一覧を開き(「再生リスト順」「新しい順」「古い順」で並べ替えでき、スクロールで続きを自動で表示)、動画の詳細へ進める。動画の詳細には「この動画が入っている再生リスト」を表示し、そこから再生リストへ移れる |
+| Twitch | Twitch にもチャンネルがあるメンバーは、Twitch の配信中のライブと過去の配信(アーカイブ)もカレンダーに表示する。Twitch の配信には「Twitch」の印が付き、詳細ダイアログでは Twitch のプレーヤーで再生する。チャンネル情報には Twitch へのリンクとフォロワー数を表示する |
+| Twitch のクリップ | Twitch の配信の詳細ダイアログに「この配信のクリップ」を再生数の多い順に表示し、押すとダイアログ内で再生する。チャンネル情報の「クリップ」タブでは、カレンダーに無い配信のクリップも含めて、人気順・新しい順で見られる |
 | 複数チャンネル | 2 チャンネル目を登録すると、チャンネルフィルターと色分けが自動で表示される。ヘッダー左端には並び順が先頭のチャンネル(01)のアイコンを表示する(押しても動作しない) |
 
 表示の状態は URL に残るので、そのまま共有できます。
@@ -49,6 +51,7 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 | `src/worker/index.ts` | API ルートと Cron ハンドラ |
 | `src/worker/sync.ts` | 同期処理(過去分の段階取得 / 差分同期 / 一度だけの補正) |
 | `src/worker/youtube.ts` | YouTube Data API クライアント、RSS、プレイリスト ID の導出 |
+| `src/worker/twitch.ts` | Twitch API(Helix)クライアント |
 | `src/worker/db.ts` | D1 アクセス(保存・期間検索・キーワード検索) |
 | `src/shared/` | 画面と Worker で共有する型(`types.ts`)と検索語の正規化(`search.ts`) |
 | `migrations/` | D1 のスキーマと初期チャンネル |
@@ -66,6 +69,8 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 | `GET /api/channels/:id/playlists` | チャンネルの再生リスト(おすすめ系が先頭、残りは最後に動画が追加された順) |
 | `GET /api/playlists/:id` | 再生リストの中身(このカレンダーに登録済みの動画だけ、再生リストの並び順) |
 | `GET /api/videos/:id/playlists` | 動画が入っている再生リスト |
+| `GET /api/videos/:id/clips` | Twitch の配信に結び付いたクリップ(再生数の多い順、50 件まで) |
+| `GET /api/channels/:id/clips?sort=&offset=` | チャンネルの Twitch のクリップ。`sort` は `popular`(再生数の多い順)か `new`(新しい順)。30 件ずつ返す |
 | `POST /api/admin/sync` | 手動同期。`Authorization: Bearer <ADMIN_TOKEN>` が必要 |
 
 ## データモデル(D1)
@@ -83,7 +88,10 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 | `members_only` | メンバー限定なら 1 |
 | `search_title` | 検索用に正規化したタイトル(後述) |
 
-ほかに `title`、`thumbnail_url`、`published_at`、`updated_at` など。
+| `platform` | `youtube` / `twitch` |
+| `twitch_video_id` | Twitch のアーカイブの動画 ID。配信中でまだ無い・保存されていない・公開が終わった場合は NULL |
+
+ほかに `title`、`thumbnail_url`、`published_at`、`updated_at` など。Twitch の行の `id` は `twitch:` + 配信の ID で、`type` は `live` です。
 
 ### `setlists`
 
@@ -99,7 +107,15 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 
 ### `channels`
 
-同期対象のチャンネル。`color`(複数チャンネル時の識別色)、`label`(表示・非表示ボタンに出す短いラベル)、`enabled`、プロフィール(`description` / `custom_url` / `banner_url` / `subscriber_count` / `video_count`、1 日 1 回更新)、過去分の取得の進み具合(`backfill_stage` / `backfill_page_token`)、一度だけ行う補正の進み具合(`premieres_*` / `members_*`)を持ちます。
+同期対象のチャンネル。`color`(複数チャンネル時の識別色)、`label`(表示・非表示ボタンに出す短いラベル)、`enabled`、プロフィール(`description` / `custom_url` / `banner_url` / `subscriber_count` / `video_count`、1 日 1 回更新)、過去分の取得の進み具合(`backfill_stage` / `backfill_page_token`)、一度だけ行う補正の進み具合(`premieres_*` / `members_*`)、Twitch のログイン名と同期の状態(`twitch_*`)を持ちます。
+
+### `twitch_clips`
+
+Twitch のクリップ。タイトル、作った人(`creator_name`)、再生数(`view_count`)、長さ、サムネイル、作成日時と、元の配信(`event_id`。`videos.id`)を持ちます。カレンダーに無い配信のクリップは `event_id` が NULL です。
+
+### `twitch_auth`
+
+Twitch API のアクセストークン(1 行だけ)。約 60 日有効で、期限が近づくと同期のときに取り直します。
 
 ## 同期の仕組み
 
@@ -161,6 +177,17 @@ Workers Paid プランに切り替えた場合は、`src/worker/sync.ts` の `RE
 - **本数が変わった再生リスト(と新しい再生リスト)だけ**、中身を最初から読み直します(`playlistItems.list`、1 ページ 50 件で 1 ユニット)。1 回の実行で読むのは 8 ページまでで、続きは次回に持ち越します。
 - おすすめ系(タイトルに「初見」「はじめて」「初めて」「まずはこれ」を含むもの)は、一覧の先頭に固定します(`src/shared/playlist.ts`)。メン限の再生リストも同じように表示します。
 - 再生リストの中に、このカレンダーに無い動画(非公開・削除済みなど)があれば、本数には数えますが一覧には表示しません。
+
+### 7. Twitch の同期(差分同期のすぐあと、毎回)
+
+`channels.twitch_login` が入っているチャンネルが対象です。YouTube のクォータは使わず、サブリクエストは 1 回の実行で 4〜5 回(最大 8 回)です。`TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` が無ければ何もしません。
+
+- **配信中のライブ**: 全チャンネル分を 1 回のリクエストで確認します(5 分ごと)。配信中の一覧から消えた配信は「配信済み」にします。
+- **アーカイブ**: 1 回の実行で 1 チャンネルずつ、新しい 20 件を確認します。配信が終わったばかりのチャンネルを先に確認し、長さとアーカイブの動画を反映します。配信中の行とアーカイブは配信の ID で同じ行にまとめます。
+- **1 日 1 回**: チャンネルごとにユーザー ID とフォロワー数を取り直し、アーカイブを 100 件まで確認します。一覧から消えたアーカイブ(保存期間を過ぎたもの)は、カレンダーの記録を残したまま再生できない表示にします。
+- **クリップ**: 1 回の実行で 1 チャンネル・100 件ずつ確認します。最近 1 週間に作られたクリップは 1 時間ごとに確認し(再生数も新しくなります)、その合間に全期間のクリップを再生数の多い順に 1 ページずつ読み進めます。全期間は 1 週間ごとに読み直します。
+- **クリップと配信の結び付け**: クリップに元のアーカイブの動画 ID があれば、そのアーカイブの配信に結び付けます。無ければ(アーカイブが無い配信)、クリップを作った時刻が開始〜終了に入っている配信に結び付けます。どちらにも当てはまらないクリップは、チャンネル情報の「クリップ」タブにだけ出ます。
+- ハイライトとアップロード動画は取り込みません。
 
 ### 種別の判定
 
@@ -248,11 +275,17 @@ Workers Paid プランに切り替えた場合は、`src/worker/sync.ts` の `RE
 3. 認証情報 → API キーを作成し、**API の制限** で YouTube Data API v3 のみに制限
    (サーバー側から呼ぶため、HTTP リファラー制限は設定しない)
 
+### 1-2. Twitch のアプリ(Twitch の配信も表示する場合)
+
+1. Twitch アカウントで 2 段階認証を有効にする
+2. [Twitch Developer Console](https://dev.twitch.tv/console) →「アプリケーションを登録」。OAuth のリダイレクト URL は `http://localhost`、カテゴリーは任意、クライアントのタイプは「機密保持」
+3. 作ったアプリの「管理」から、Client ID と Client Secret(「新しい秘密」で発行)を控える
+
 ### 2. ローカル開発
 
 ```bash
 npm install
-cp .dev.vars.example .dev.vars   # YOUTUBE_API_KEY と ADMIN_TOKEN を記入
+cp .dev.vars.example .dev.vars   # YOUTUBE_API_KEY と ADMIN_TOKEN(と TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET)を記入
 npm run db:migrate:local
 npm run dev                      # http://localhost:5173
 ```
@@ -274,6 +307,8 @@ npm run db:migrate:remote
 npx wrangler secret put YOUTUBE_API_KEY
 npx wrangler secret put ADMIN_TOKEN
 npx wrangler secret put GITHUB_TOKEN      # セトリの点検の Issue 用(下記)
+npx wrangler secret put TWITCH_CLIENT_ID      # Twitch の配信も表示する場合
+npx wrangler secret put TWITCH_CLIENT_SECRET
 npm run deploy
 ```
 
@@ -328,6 +363,9 @@ npx wrangler triggers deploy  # Cron の設定だけを本番に反映する
 | `0010_channel_label.sql` | チャンネルの表示・非表示ボタンに出す短いラベル |
 | `0011_channel_label_ja.sql` | ラベルを絵文字から日本語の名前に変える(01 は「公式」のまま) |
 
+| `0012_twitch.sql` | Twitch のログイン名と同期の状態、`videos` の `platform` / `twitch_video_id`、アクセストークンの保存先 |
+| `0013_twitch_clips.sql` | Twitch のクリップと、その同期の進み具合 |
+
 ### チャンネルの追加
 
 ID を 1 行追加するだけで、次の Cron から過去分の取り込みが始まります(タイトルとアイコンは自動取得)。
@@ -339,6 +377,13 @@ npx wrangler d1 execute prnb-youtube-calendar --remote \
 
 2 チャンネル以上になると、画面にチャンネルフィルターと色分けが自動で表示されます。`sort_order` が画面での並び順です。 `color` には CSS の色をそのまま書けます。`var(--ink)` を指定すると、ライトテーマでは黒、ダークテーマでは白になります。`label` を入れると、チャンネルの表示・非表示を切り替えるボタンにチャンネル名の代わりに表示します(例: `公式`、`桃瀬にな`)。
 
+Twitch にもチャンネルがある場合は、`twitch_login` にログイン名(`twitch.tv/◯◯` の部分)を入れると、次の Cron から Twitch の配信も取り込みます。
+
+```bash
+npx wrangler d1 execute prnb-youtube-calendar --remote \
+  --command "UPDATE channels SET twitch_login = 'xxxxxxxx' WHERE id = 'UCxxxxxxxxxxxxxxxxxxxxxx'"
+```
+
 チャンネルを増やすと、各チャンネルの同期の間隔が延びます(無料プランでは「チャンネル数 ÷ 2 × 5 分」ごと)。また、YouTube API の 1 日の上限(10,000 ユニット)にも近づくので、10 チャンネルを超える場合は Workers Paid プランへの切り替えを検討してください。
 
 ## 既知の制限
@@ -346,4 +391,8 @@ npx wrangler d1 execute prnb-youtube-calendar --remote \
 - **メンバー限定から一般公開に変わった動画**: 「メン限」ラベルが付いたままになります。
 - **予定日時を過ぎた配信予定**: 待機所が残っている限り、YouTube が「配信予定」として返すため、カレンダーにも予定として表示されます。
 - **非公式のプレイリスト**: `UUSH` / `UULF` / `UUMO` / `UUMF` の仕様が変わると、ショート・プレミア公開・メンバー限定の判定に影響します。
+- **Twitch の配信予定**: Twitch には待機所が無いため、配信予定は表示されません。配信が始まってから(5 分以内に)表示されます。
+- **Twitch のアーカイブ**: 取り込めるのは、取り込みを始めた時点で Twitch に残っているものだけです。保存期間(7〜60 日)を過ぎると再生できなくなり、アーカイブを残さない配信は、配信中に取り込んだ記録だけが残ります(終了時刻は 5 分ほどずれることがあります)。
+- **Twitch のクリップ**: 削除されたクリップは一覧に残り、押しても再生できません。アーカイブが無い配信のクリップは作成時刻で結び付けるため、配信が終わったあとに作られたものは配信に結び付かず、古いアーカイブから作られたクリップが、作った時刻に行われていた別の配信に結び付くことがあります。Twitch の API が返す全期間のクリップには上限があり(1,000 件ほど)、再生数の少ない古いクリップは取り込まれないことがあります。
+- **YouTube と Twitch の同時配信**: 同じ配信が 2 件並んで表示されます。
 - **検索の強調表示**: 半角カタカナの濁点(`ｶﾞ` など)を含む語は、検索では一致しても、強調表示されないことがあります。

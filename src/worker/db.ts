@@ -2,8 +2,12 @@ import { normalizeForSearch } from '../shared/search';
 import { isRecommendedPlaylist } from '../shared/playlist';
 import type {
   CalendarEvent,
+  Clip,
+  ClipPage,
+  ClipSort,
   Channel,
   LiveStatus,
+  Platform,
   Playlist,
   PlaylistDetail,
   SearchPage,
@@ -36,6 +40,14 @@ export interface ChannelRow {
   members_page_token: string | null;
   members_scanned_at: string | null;
   synced_at: string | null;
+  twitch_login: string | null;
+  twitch_user_id: string | null;
+  twitch_follower_count: number | null;
+  twitch_profile_updated_at: string | null;
+  twitch_synced_at: string | null;
+  twitch_clips_synced_at: string | null;
+  twitch_clips_cursor: string | null;
+  twitch_clips_backfilled_at: string | null;
 }
 
 export interface VideoRow {
@@ -54,6 +66,8 @@ export interface VideoRow {
 /** DB から読み出した行。members_only は markMembersOnly でだけ立てるので、書き込み用の VideoRow には含めない */
 interface StoredVideoRow extends VideoRow {
   members_only: number;
+  platform: Platform;
+  twitch_video_id: string | null;
 }
 
 const placeholders = (n: number) => Array.from({ length: n }, () => '?').join(',');
@@ -70,6 +84,8 @@ export function toChannel(row: ChannelRow): Channel {
     bannerUrl: row.banner_url,
     subscriberCount: row.subscriber_count,
     videoCount: row.video_count,
+    twitchLogin: row.twitch_login,
+    twitchFollowerCount: row.twitch_follower_count,
   };
 }
 
@@ -79,6 +95,8 @@ function toEvent(row: StoredVideoRow): CalendarEvent {
   return {
     id: row.id,
     channelId: row.channel_id,
+    platform: row.platform,
+    twitchVideoId: row.twitch_video_id,
     type: row.type,
     liveStatus: isLive ? row.live_status : null,
     title: row.title,
@@ -184,10 +202,10 @@ export async function findExistingVideoIds(db: D1Database, ids: string[]): Promi
   return new Set(results.map((r) => r.id));
 }
 
-/** 状態が変わりうるライブ(予定・配信中)の ID */
+/** 状態が変わりうる YouTube のライブ(予定・配信中)の ID。Twitch の配信は videos.list に返ってこないので含めない */
 export async function findActiveLiveIds(db: D1Database, channelId: string): Promise<string[]> {
   const { results } = await db
-    .prepare(`SELECT id FROM videos WHERE channel_id = ? AND live_status IN ('upcoming', 'live')`)
+    .prepare(`SELECT id FROM videos WHERE channel_id = ? AND platform = 'youtube' AND live_status IN ('upcoming', 'live')`)
     .bind(channelId)
     .all<{ id: string }>();
   return results.map((r) => r.id);
@@ -367,7 +385,7 @@ export async function findSetlistTargets(db: D1Database, now: string, notBefore:
     .prepare(
       `SELECT v.id, v.ended_at
          FROM videos v LEFT JOIN setlists s ON s.video_id = v.id
-        WHERE v.type = 'live' AND v.live_status = 'ended' AND v.members_only = 0
+        WHERE v.platform = 'youtube' AND v.type = 'live' AND v.live_status = 'ended' AND v.members_only = 0
           AND v.title LIKE '%歌枠%' AND v.ended_at IS NOT NULL AND v.ended_at <= ?
           AND (s.video_id IS NULL OR (s.text IS NULL AND s.next_check_at <= ?))
         ORDER BY v.ended_at DESC
@@ -630,4 +648,292 @@ export function playlistItemsPageStmts(
     );
   }
   return stmts;
+}
+
+// ---------- Twitch ----------
+
+/** Twitch の行の ID。配信(stream)の ID から作り、配信中の行とアーカイブの行を同じものにする */
+export const twitchEventId = (streamId: string) => `twitch:${streamId}`;
+
+export interface TwitchState {
+  /** 保存してあるアクセストークン。無ければ null */
+  token: { access_token: string; expires_at: string } | null;
+  /** 配信中として登録されている Twitch の配信 */
+  activeLives: { id: string; channel_id: string }[];
+}
+
+/** Twitch の同期の前に必要なものを 1 回の batch で読む */
+export async function readTwitchState(db: D1Database): Promise<TwitchState> {
+  const [token, lives] = await db.batch<Record<string, string>>([
+    db.prepare('SELECT access_token, expires_at FROM twitch_auth WHERE id = 1'),
+    db.prepare(`SELECT id, channel_id FROM videos WHERE platform = 'twitch' AND live_status = 'live'`),
+  ]);
+  return {
+    token: (token.results[0] as TwitchState['token'] | undefined) ?? null,
+    activeLives: lives.results as TwitchState['activeLives'],
+  };
+}
+
+export function saveTwitchTokenStmt(db: D1Database, accessToken: string, expiresAt: string) {
+  return db
+    .prepare(
+      `INSERT INTO twitch_auth (id, access_token, expires_at) VALUES (1, ?, ?)
+       ON CONFLICT (id) DO UPDATE SET access_token = excluded.access_token, expires_at = excluded.expires_at`,
+    )
+    .bind(accessToken, expiresAt);
+}
+
+/** トークンが使えなくなったとき(401)に消す。次の実行で取り直す */
+export async function clearTwitchToken(db: D1Database) {
+  await db.prepare('DELETE FROM twitch_auth').run();
+}
+
+export interface TwitchLiveRow {
+  streamId: string;
+  channelId: string;
+  title: string;
+  thumbnailUrl: string | null;
+  startedAt: string;
+}
+
+/** 配信中のライブを保存する。配信中のあいだは何度も呼ばれるので、変わったときだけ書き込む */
+export function upsertTwitchLiveStmts(db: D1Database, rows: TwitchLiveRow[], now: string): D1PreparedStatement[] {
+  if (rows.length === 0) return [];
+  const stmt = db.prepare(
+    `INSERT INTO videos (id, channel_id, platform, type, live_status, title, search_title, thumbnail_url,
+                         event_at, published_at, updated_at)
+     VALUES (?, ?, 'twitch', 'live', 'live', ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (id) DO UPDATE SET
+       live_status   = 'live',
+       title         = excluded.title,
+       search_title  = excluded.search_title,
+       thumbnail_url = excluded.thumbnail_url,
+       duration_sec  = NULL,
+       ended_at      = NULL,
+       updated_at    = excluded.updated_at
+     WHERE videos.live_status IS NOT 'live' OR videos.title IS NOT excluded.title`,
+  );
+  return rows.map((r) =>
+    stmt.bind(
+      twitchEventId(r.streamId), r.channelId, r.title, normalizeForSearch(r.title), r.thumbnailUrl,
+      r.startedAt, r.startedAt, now,
+    ),
+  );
+}
+
+/** 配信中の一覧から消えた配信を、配信済みにする。終了日時は、アーカイブがあればその長さで後から直す */
+export function endTwitchLivesStmt(db: D1Database, ids: string[], now: string) {
+  if (ids.length === 0) return null;
+  return db
+    .prepare(
+      `UPDATE videos SET live_status = 'ended', ended_at = ?, updated_at = ?
+        WHERE live_status = 'live' AND id IN (${placeholders(ids.length)})`,
+    )
+    .bind(now, now, ...ids);
+}
+
+/** 配信中の配信に、作られたアーカイブの動画 ID を結び付ける(タイトルなどは配信中の情報を優先する) */
+export function linkTwitchArchiveStmt(db: D1Database, streamId: string, videoId: string) {
+  return db
+    .prepare('UPDATE videos SET twitch_video_id = ?1 WHERE id = ?2 AND twitch_video_id IS NOT ?1')
+    .bind(videoId, twitchEventId(streamId));
+}
+
+export interface TwitchArchiveRow {
+  /** 行の ID(twitchEventId) */
+  id: string;
+  channelId: string;
+  videoId: string;
+  title: string;
+  thumbnailUrl: string | null;
+  durationSec: number | null;
+  startedAt: string;
+  endedAt: string | null;
+}
+
+/**
+ * 配信が終わったアーカイブを保存する。配信中に登録した行があれば、開始日時はそのまま残す。
+ * 同じ一覧を何度も読むので、変わったときだけ書き込む
+ */
+export function upsertTwitchArchiveStmts(db: D1Database, rows: TwitchArchiveRow[], now: string): D1PreparedStatement[] {
+  if (rows.length === 0) return [];
+  const stmt = db.prepare(
+    `INSERT INTO videos (id, channel_id, platform, type, live_status, title, search_title, thumbnail_url, duration_sec,
+                         event_at, ended_at, published_at, twitch_video_id, updated_at)
+     VALUES (?, ?, 'twitch', 'live', 'ended', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (id) DO UPDATE SET
+       live_status     = 'ended',
+       title           = excluded.title,
+       search_title    = excluded.search_title,
+       thumbnail_url   = COALESCE(excluded.thumbnail_url, videos.thumbnail_url),
+       duration_sec    = excluded.duration_sec,
+       ended_at        = excluded.ended_at,
+       twitch_video_id = excluded.twitch_video_id,
+       updated_at      = excluded.updated_at
+     WHERE videos.live_status IS NOT 'ended'
+        OR videos.title IS NOT excluded.title
+        OR videos.duration_sec IS NOT excluded.duration_sec
+        OR videos.twitch_video_id IS NOT excluded.twitch_video_id
+        OR (excluded.thumbnail_url IS NOT NULL AND videos.thumbnail_url IS NOT excluded.thumbnail_url)`,
+  );
+  return rows.map((r) =>
+    stmt.bind(
+      r.id, r.channelId, r.title, normalizeForSearch(r.title), r.thumbnailUrl, r.durationSec,
+      r.startedAt, r.endedAt, r.startedAt, r.videoId, now,
+    ),
+  );
+}
+
+/** 公開が終わった(一覧から消えた)アーカイブの動画 ID を外す。カレンダーの記録は残す */
+export function clearExpiredTwitchArchivesStmt(db: D1Database, channelId: string, currentVideoIds: string[]) {
+  const notCurrent =
+    currentVideoIds.length > 0 ? `AND twitch_video_id NOT IN (${placeholders(currentVideoIds.length)})` : '';
+  return db
+    .prepare(
+      `UPDATE videos SET twitch_video_id = NULL
+        WHERE channel_id = ? AND platform = 'twitch' AND twitch_video_id IS NOT NULL ${notCurrent}`,
+    )
+    .bind(channelId, ...currentVideoIds);
+}
+
+/** Twitch のチャンネルの同期の結果を残す。profile は 1 日 1 回の確認をしたときだけ渡す */
+export function markTwitchSyncedStmt(
+  db: D1Database,
+  channelId: string,
+  profile: { userId: string; followerCount: number | null } | null,
+  now: string,
+) {
+  if (!profile) return db.prepare('UPDATE channels SET twitch_synced_at = ? WHERE id = ?').bind(now, channelId);
+  return db
+    .prepare(
+      `UPDATE channels
+          SET twitch_user_id = ?, twitch_follower_count = COALESCE(?, twitch_follower_count),
+              twitch_profile_updated_at = ?, twitch_synced_at = ?
+        WHERE id = ?`,
+    )
+    .bind(profile.userId, profile.followerCount, now, now, channelId);
+}
+
+// ---------- Twitch のクリップ ----------
+
+export interface TwitchClipRow {
+  id: string;
+  /** 元のアーカイブの動画 ID。無ければ空 */
+  videoId: string;
+  title: string;
+  creatorName: string | null;
+  viewCount: number;
+  durationSec: number | null;
+  thumbnailUrl: string | null;
+  createdAt: string;
+}
+
+/**
+ * クリップを保存し、元の配信に結び付ける。アーカイブの動画 ID があればそれで、無ければ(アーカイブが無い配信)、
+ * クリップを作った時刻が配信の開始〜終了に入っている配信に結び付ける。一度結び付いたものは外さない。
+ * 同じクリップを何度も読むので、変わったときだけ書き込む
+ */
+export function upsertTwitchClipStmts(
+  db: D1Database,
+  channelId: string,
+  clips: TwitchClipRow[],
+  now: string,
+): D1PreparedStatement[] {
+  if (clips.length === 0) return [];
+  const stmt = db.prepare(
+    `INSERT INTO twitch_clips (id, channel_id, event_id, title, creator_name, view_count, duration_sec,
+                               thumbnail_url, created_at, updated_at)
+     VALUES (?1, ?2,
+             CASE WHEN ?3 != ''
+               THEN (SELECT id FROM videos WHERE platform = 'twitch' AND twitch_video_id = ?3)
+               ELSE (SELECT id FROM videos
+                      WHERE platform = 'twitch' AND channel_id = ?2 AND event_at <= ?9
+                        AND (ended_at >= ?9 OR live_status = 'live')
+                      ORDER BY event_at DESC LIMIT 1)
+             END,
+             ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+     ON CONFLICT (id) DO UPDATE SET
+       event_id      = COALESCE(excluded.event_id, twitch_clips.event_id),
+       title         = excluded.title,
+       view_count    = excluded.view_count,
+       thumbnail_url = excluded.thumbnail_url,
+       updated_at    = excluded.updated_at
+     WHERE twitch_clips.view_count IS NOT excluded.view_count
+        OR twitch_clips.title IS NOT excluded.title
+        OR (excluded.event_id IS NOT NULL AND twitch_clips.event_id IS NOT excluded.event_id)`,
+  );
+  return clips.map((c) =>
+    stmt.bind(
+      c.id, channelId, c.videoId, c.title, c.creatorName, c.viewCount, c.durationSec, c.thumbnailUrl, c.createdAt, now,
+    ),
+  );
+}
+
+/** 最近のクリップを確認した印を付ける */
+export function markTwitchClipsSyncedStmt(db: D1Database, channelId: string, now: string) {
+  return db.prepare('UPDATE channels SET twitch_clips_synced_at = ? WHERE id = ?').bind(now, channelId);
+}
+
+/** 全期間のクリップの読み込みの進み具合を残す。cursor が null なら最後まで読んだ */
+export function saveTwitchClipsBackfillStmt(db: D1Database, channelId: string, cursor: string | null, now: string) {
+  return db
+    .prepare(
+      `UPDATE channels
+          SET twitch_clips_cursor = ?1,
+              twitch_clips_backfilled_at = CASE WHEN ?1 IS NULL THEN ?2 ELSE twitch_clips_backfilled_at END
+        WHERE id = ?3`,
+    )
+    .bind(cursor, now, channelId);
+}
+
+interface StoredClipRow {
+  id: string;
+  channel_id: string;
+  event_id: string | null;
+  title: string;
+  creator_name: string | null;
+  view_count: number;
+  duration_sec: number | null;
+  thumbnail_url: string | null;
+  created_at: string;
+}
+
+const toClip = (row: StoredClipRow): Clip => ({
+  id: row.id,
+  channelId: row.channel_id,
+  eventId: row.event_id,
+  title: row.title,
+  creatorName: row.creator_name,
+  viewCount: row.view_count,
+  durationSec: row.duration_sec,
+  thumbnailUrl: row.thumbnail_url,
+  createdAt: row.created_at,
+});
+
+/** 配信に結び付いたクリップ(再生数の多い順) */
+export async function listEventClips(db: D1Database, eventId: string, limit: number): Promise<Clip[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM twitch_clips WHERE event_id = ? ORDER BY view_count DESC, id LIMIT ?')
+    .bind(eventId, limit)
+    .all<StoredClipRow>();
+  return results.map(toClip);
+}
+
+/** チャンネルのクリップの 1 ページ分(配信に結び付いていないものも含む) */
+export async function listChannelClips(
+  db: D1Database,
+  channelId: string,
+  sort: ClipSort,
+  offset: number,
+  limit: number,
+): Promise<ClipPage> {
+  const order = sort === 'new' ? 'created_at DESC, id' : 'view_count DESC, id';
+  const { results } = await db
+    .prepare(`SELECT * FROM twitch_clips WHERE channel_id = ? ORDER BY ${order} LIMIT ? OFFSET ?`)
+    .bind(channelId, limit + 1, offset)
+    .all<StoredClipRow>();
+  return {
+    clips: results.slice(0, limit).map(toClip),
+    nextOffset: results.length > limit ? offset + limit : null,
+  };
 }

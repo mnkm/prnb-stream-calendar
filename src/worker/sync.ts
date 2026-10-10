@@ -5,9 +5,13 @@ import { RequestBudget, countD1 } from './budget';
 import {
   type ChannelProfile,
   type ChannelRow,
+  type TwitchArchiveRow,
   type VideoRow,
+  clearExpiredTwitchArchivesStmt,
+  clearTwitchToken,
   deletePlaylistsStmt,
   deleteVideosStmt,
+  endTwitchLivesStmt,
   fillSearchTitles,
   findActiveLiveIds,
   findPendingPlaylist,
@@ -15,6 +19,7 @@ import {
   findSetlistTargets,
   findSetlistsToAudit,
   findExistingVideoIds,
+  linkTwitchArchiveStmt,
   listEnabledChannels,
   listPlaylistIds,
   markChannelSyncedStmt,
@@ -23,19 +28,29 @@ import {
   markPremieresStmt,
   markSetlistAuditsNotifiedStmts,
   markShortsStmt,
+  markTwitchClipsSyncedStmt,
+  markTwitchSyncedStmt,
   playlistItemsPageStmts,
+  readTwitchState,
   saveBackfillProgress,
   saveMembersScanProgress,
   saveSetlistAuditStmts,
   saveSetlistStmt,
   savePremieresScanProgress,
+  saveTwitchClipsBackfillStmt,
+  saveTwitchTokenStmt,
+  twitchEventId,
   updateChannelProfile,
   upsertPlaylistStmt,
+  upsertTwitchArchiveStmts,
+  upsertTwitchClipStmts,
+  upsertTwitchLiveStmts,
   upsertVideoStmts,
   writeBatch,
 } from './db';
 import { buildSetlistAuditIssue, createIssue } from './github';
 import { toIsoSeconds } from './time';
+import { type TwClip, TwitchApiError, TwitchClient } from './twitch';
 import {
   RequestBudgetExceededError,
   SHORTS_MAX_DURATION_SEC,
@@ -95,10 +110,32 @@ const PLAYLISTS_REFRESH_MS = 24 * 60 * 60 * 1000;
 const PLAYLIST_PAGES_PER_RUN = 8;
 /** チャンネルのプロフィール(説明・登録者数など)を取り直す間隔 */
 const PROFILE_REFRESH_MS = 24 * 60 * 60 * 1000;
+/**
+ * Twitch の同期に必要なサブリクエスト数の上限。
+ * D1 2 回(読み取り 1・書き込み 1)+ Twitch 6 回(トークン・配信中・ユーザー ID・フォロワー数・アーカイブ・クリップ)
+ */
+const TWITCH_REQUESTS = 8;
+/** 最近のクリップを確認し直す間隔(チャンネルごと) */
+const TWITCH_CLIPS_REFRESH_MS = 60 * 60 * 1000;
+/** 最近のクリップとして確認する期間。この期間に作られたクリップは、再生数も新しくなる */
+const TWITCH_CLIPS_RECENT_MS = 7 * 24 * 60 * 60 * 1000;
+/** 全期間のクリップを読み直す間隔(古いクリップの再生数を新しくするため) */
+const TWITCH_CLIPS_BACKFILL_MS = 7 * 24 * 60 * 60 * 1000;
+/** ふだん確認するアーカイブの数(新しい順)。配信が終わった直後のものが入っていればよい */
+const TWITCH_ARCHIVES_RECENT = 20;
+/** 1 日 1 回、まとめて確認するアーカイブの数(1 回で取れる上限)。公開が終わったものもここで見つける */
+const TWITCH_ARCHIVES_FULL = 100;
+/** Twitch のユーザー ID・フォロワー数・全アーカイブを確認し直す間隔 */
+const TWITCH_PROFILE_REFRESH_MS = 24 * 60 * 60 * 1000;
+/** トークンの期限がこれより近ければ取り直す */
+const TWITCH_TOKEN_MARGIN_MS = 24 * 60 * 60 * 1000;
 
 export interface SyncEnv {
   DB: D1Database;
   YOUTUBE_API_KEY: string;
+  /** Twitch のアプリの Client ID と Client Secret。無ければ Twitch は同期しない */
+  TWITCH_CLIENT_ID?: string;
+  TWITCH_CLIENT_SECRET?: string;
   /** セトリの点検の Issue を作る GitHub のトークン(Issues の読み書き)。無ければ点検だけ行い、通知しない */
   GITHUB_TOKEN?: string;
   /** Issue を作るリポジトリ(owner/name) */
@@ -142,6 +179,13 @@ export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
         return incrementalSync(db, yt, channel);
       }),
     );
+  }
+
+  // Twitch にもチャンネルがあるものは、配信中のライブと過去の配信のアーカイブを取り込む(毎回、全チャンネル分)
+  try {
+    await syncTwitch(db, budget, env, channels);
+  } catch (err) {
+    console.error('syncTwitch failed', err);
   }
 
   // 2. 残りの予算で、過去分の取得と一度だけの補正を sort_order の順に進める
@@ -421,6 +465,179 @@ function toVideoRow(v: YtVideo, isShort: boolean, inVideosTab: boolean): VideoRo
 }
 
 const nowIso = () => toIsoSeconds(new Date());
+
+/**
+ * Twitch の同期。配信中のライブは全チャンネル分を 1 回で確認し、アーカイブは 1 回の実行で 1 チャンネルずつ確認する
+ * (配信が終わったばかりのチャンネルを先に、あとは最後に確認してから時間がたった順)。
+ * Twitch には待機所が無いので、配信予定は取り込まない
+ */
+async function syncTwitch(db: D1Database, budget: RequestBudget, env: SyncEnv, channels: ChannelRow[]) {
+  const targets = channels.filter((c) => c.twitch_login);
+  if (!env.TWITCH_CLIENT_ID || !env.TWITCH_CLIENT_SECRET || targets.length === 0) return;
+  if (budget.remaining < TWITCH_REQUESTS) return;
+
+  const tw = new TwitchClient(env.TWITCH_CLIENT_ID, env.TWITCH_CLIENT_SECRET, budget);
+  const now = new Date();
+  const stamp = toIsoSeconds(now);
+  const state = await readTwitchState(db);
+  const stmts: (D1PreparedStatement | null)[] = [];
+
+  if (state.token && Date.parse(state.token.expires_at) - now.getTime() > TWITCH_TOKEN_MARGIN_MS) {
+    tw.setToken(state.token.access_token);
+  } else {
+    const token = await tw.fetchAppToken();
+    stmts.push(saveTwitchTokenStmt(db, token.accessToken, toIsoSeconds(new Date(now.getTime() + token.expiresInSec * 1000))));
+  }
+
+  try {
+    // 配信中のライブ。一覧から消えた配信は、配信済みにする
+    const byLogin = new Map(targets.map((c) => [c.twitch_login!.toLowerCase(), c]));
+    const streams = await tw.getStreams([...byLogin.keys()]);
+    const liveStreamIds = new Set(streams.map((s) => s.id));
+    const liveEventIds = new Set(streams.map((s) => twitchEventId(s.id)));
+    const ended = state.activeLives.filter((r) => !liveEventIds.has(r.id));
+    stmts.push(
+      ...upsertTwitchLiveStmts(
+        db,
+        streams.flatMap((s) => {
+          const channel = byLogin.get(s.userLogin);
+          return channel
+            ? [{ streamId: s.id, channelId: channel.id, title: s.title, thumbnailUrl: s.thumbnailUrl, startedAt: toIsoSeconds(s.startedAt) }]
+            : [];
+        }),
+        stamp,
+      ),
+      endTwitchLivesStmt(db, ended.map((r) => r.id), stamp),
+    );
+
+    // アーカイブ。配信が終わったばかりのチャンネルを先に確認し、長さとアーカイブの動画を早く反映する
+    const justEnded = new Set(ended.map((r) => r.channel_id));
+    const [channel] = [...targets].sort(
+      (a, b) =>
+        Number(justEnded.has(b.id)) - Number(justEnded.has(a.id)) ||
+        (a.twitch_synced_at ?? '').localeCompare(b.twitch_synced_at ?? ''),
+    );
+    stmts.push(...(await twitchArchiveStmts(db, tw, channel, liveStreamIds, now)));
+
+    // クリップ。取れなくても、配信とアーカイブの結果は保存する
+    try {
+      stmts.push(...(await twitchClipStmts(db, tw, targets, now)));
+    } catch (err) {
+      if (err instanceof TwitchApiError && err.status === 401) throw err;
+      console.warn('twitch clips failed', err);
+    }
+  } catch (err) {
+    // トークンが取り消されていたら消して、次の実行で取り直す
+    if (err instanceof TwitchApiError && err.status === 401) await clearTwitchToken(db);
+    throw err;
+  } finally {
+    // 途中で失敗しても、そこまでの結果(取り直したトークンや、配信中のライブ)は保存する
+    await writeBatch(db, stmts);
+  }
+}
+
+/**
+ * クリップを 1 回の実行で 1 チャンネル・100 件ずつ確認して、書き込む文を返す。
+ * 最近 1 週間のクリップ(1 時間ごと)を先に確認し、その必要が無いときは全期間のクリップ(再生数の多い順)を
+ * 1 ページずつ読み進める。全期間は 1 週間ごとに読み直す
+ */
+async function twitchClipStmts(
+  db: D1Database,
+  tw: TwitchClient,
+  targets: ChannelRow[],
+  now: Date,
+): Promise<D1PreparedStatement[]> {
+  const stamp = toIsoSeconds(now);
+  const elapsed = (at: string | null) => (at ? now.getTime() - Date.parse(at) : Infinity);
+  const ready = targets.filter((c) => c.twitch_user_id);
+
+  const [recent] = ready
+    .filter((c) => elapsed(c.twitch_clips_synced_at) >= TWITCH_CLIPS_REFRESH_MS)
+    .sort((a, b) => (a.twitch_clips_synced_at ?? '').localeCompare(b.twitch_clips_synced_at ?? ''));
+  if (recent) {
+    const startedAt = toIsoSeconds(new Date(now.getTime() - TWITCH_CLIPS_RECENT_MS));
+    const { clips } = await tw.listClips(recent.twitch_user_id!, { startedAt });
+    return [...clipStmts(db, recent.id, clips, stamp), markTwitchClipsSyncedStmt(db, recent.id, stamp)];
+  }
+
+  const backfill = ready.find(
+    (c) => c.twitch_clips_cursor || elapsed(c.twitch_clips_backfilled_at) >= TWITCH_CLIPS_BACKFILL_MS,
+  );
+  if (!backfill) return [];
+  const after = backfill.twitch_clips_cursor ?? undefined;
+  let page: Awaited<ReturnType<TwitchClient['listClips']>>;
+  try {
+    page = await tw.listClips(backfill.twitch_user_id!, { after });
+  } catch (err) {
+    // 続きの位置が使えなくなっていたら、そこで読み終わったことにする(次は 1 週間後に最初から読み直す)
+    if (!(after && err instanceof TwitchApiError && err.status === 400)) throw err;
+    page = { clips: [], cursor: null };
+  }
+  // 続きがあるのに 1 件も返らないときは、同じ位置で止まらないよう、読み終わったことにする
+  const cursor = page.clips.length > 0 ? page.cursor : null;
+  return [...clipStmts(db, backfill.id, page.clips, stamp), saveTwitchClipsBackfillStmt(db, backfill.id, cursor, stamp)];
+}
+
+const clipStmts = (db: D1Database, channelId: string, clips: TwClip[], stamp: string) =>
+  upsertTwitchClipStmts(db, channelId, clips.map((c) => ({ ...c, createdAt: toIsoSeconds(c.createdAt) })), stamp);
+
+/** 1 チャンネル分のアーカイブを確認して、書き込む文を返す。1 日 1 回はユーザー ID・フォロワー数も確認し、全アーカイブを見る */
+async function twitchArchiveStmts(
+  db: D1Database,
+  tw: TwitchClient,
+  channel: ChannelRow,
+  liveStreamIds: Set<string>,
+  now: Date,
+): Promise<(D1PreparedStatement | null)[]> {
+  const stamp = toIsoSeconds(now);
+  const refreshedAt = channel.twitch_profile_updated_at ? Date.parse(channel.twitch_profile_updated_at) : 0;
+  const full = !channel.twitch_user_id || now.getTime() - refreshedAt >= TWITCH_PROFILE_REFRESH_MS;
+
+  let userId = channel.twitch_user_id;
+  let followerCount: number | null = null;
+  if (full) {
+    userId = await tw.getUserId(channel.twitch_login!);
+    if (!userId) {
+      console.warn(`twitch user not found: ${channel.twitch_login}`);
+      return [markTwitchSyncedStmt(db, channel.id, null, stamp)];
+    }
+    try {
+      followerCount = await tw.getFollowerCount(userId);
+    } catch (err) {
+      // フォロワー数が取れなくても、アーカイブの確認は続ける
+      if (err instanceof RequestBudgetExceededError || (err instanceof TwitchApiError && err.status === 401)) throw err;
+      console.warn(`twitch follower count failed for ${channel.twitch_login}`, err);
+    }
+  }
+
+  const { archives, hasMore } = await tw.listArchives(userId!, full ? TWITCH_ARCHIVES_FULL : TWITCH_ARCHIVES_RECENT);
+  const stmts: (D1PreparedStatement | null)[] = [];
+  const rows: TwitchArchiveRow[] = [];
+  for (const a of archives) {
+    if (a.streamId && liveStreamIds.has(a.streamId)) {
+      // 配信中のアーカイブは長さもサムネイルもまだ途中なので、動画 ID だけ結び付ける
+      stmts.push(linkTwitchArchiveStmt(db, a.streamId, a.id));
+      continue;
+    }
+    const startedMs = Date.parse(a.createdAt);
+    rows.push({
+      // 元の配信がわからないアーカイブは、動画 ID から行の ID を作る
+      id: twitchEventId(a.streamId ?? `v${a.id}`),
+      channelId: channel.id,
+      videoId: a.id,
+      title: a.title,
+      thumbnailUrl: a.thumbnailUrl,
+      durationSec: a.durationSec,
+      startedAt: toIsoSeconds(a.createdAt),
+      endedAt: a.durationSec ? toIsoSeconds(new Date(startedMs + a.durationSec * 1000)) : null,
+    });
+  }
+  stmts.push(...upsertTwitchArchiveStmts(db, rows, stamp));
+  // 全部見られたときだけ、一覧に無いアーカイブを「公開が終わった」とみなす
+  if (full && !hasMore) stmts.push(clearExpiredTwitchArchivesStmt(db, channel.id, archives.map((a) => a.id)));
+  stmts.push(markTwitchSyncedStmt(db, channel.id, full ? { userId: userId!, followerCount } : null, stamp));
+  return stmts;
+}
 
 /**
  * 歌枠のセトリを確認する。関連性順の上位コメントから、タイムスタンプを多く含む最初のものをセトリとして保存する。
