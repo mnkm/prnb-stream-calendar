@@ -50,6 +50,7 @@ export interface ChannelRow {
   twitch_clips_synced_at: string | null;
   twitch_clips_cursor: string | null;
   twitch_clips_backfilled_at: string | null;
+  songlist_talent: string | null;
 }
 
 export interface VideoRow {
@@ -90,6 +91,7 @@ export function toChannel(row: ChannelRow): Channel {
     videoCount: row.video_count,
     twitchLogin: row.twitch_login,
     twitchFollowerCount: row.twitch_follower_count,
+    songlistTalent: row.songlist_talent,
   };
 }
 

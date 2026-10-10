@@ -39,6 +39,8 @@ export interface Channel {
   /** Twitch にもチャンネルがある場合のログイン名(twitch.tv/◯◯ の部分) */
   twitchLogin: string | null;
   twitchFollowerCount: number | null;
+  /** タレント別の楽曲リストのサイトで、このチャンネルを表示する talent パラメータの値。無ければ null */
+  songlistTalent: string | null;
 }
 
 export interface CalendarEvent {
