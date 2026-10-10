@@ -9,7 +9,10 @@ import { YouTubeIcon } from './Header';
 import { Modal } from './Modal';
 import { PlaylistDetailView, PlaylistGrid } from './Playlists';
 
-const compactNumber = new Intl.NumberFormat('ja-JP', { notation: 'compact', maximumFractionDigits: 1 });
+/** タレント別の楽曲リスト(各チャンネルで歌われた曲を探せるサイト)。talent パラメータでチャンネルを選んだ状態で開く */
+const SONGLIST_URL = 'https://mnkm.page/prnb-songlist/';
+
+const compactNumber =new Intl.NumberFormat('ja-JP', { notation: 'compact', maximumFractionDigits: 1 });
 
 type ChannelState = { kind: 'channel'; channel: Channel; fromList?: boolean };
 
@@ -174,6 +177,18 @@ function ChannelProfile({
               Twitch で開く
             </a>
           )}
+          {/* 配信サイトへのリンクと区別できるよう、枠線だけのボタンにする */}
+          {channel.songlistTalent && (
+            <a
+              href={`${SONGLIST_URL}?${new URLSearchParams({ talent: channel.songlistTalent })}`}
+              target="_blank"
+              rel="noreferrer"
+              className="col-span-full flex items-center justify-center gap-1.5 rounded-full border border-line px-3 py-2.5 text-sm font-medium whitespace-nowrap transition hover:bg-ink/5"
+            >
+              <SonglistIcon className="size-4 shrink-0" />
+              楽曲リストを開く
+            </a>
+          )}
         </div>
 
         <div role="tablist" aria-label="チャンネルの表示" className="flex gap-1 border-b border-line">
@@ -207,6 +222,19 @@ function ChannelProfile({
 
       </div>
     </div>
+  );
+}
+
+/**
+ * 楽曲リストのサイトのアイコン。サイトの favicon(MingCute の playlist_fill、Apache-2.0)と同じ形。
+ * favicon は画像ファイルではなく HTML に直接書かれていて読み込めないので、同じ形をここに持つ。
+ * 色は、ダークテーマでも見えるよう、ボタンの文字色に合わせる(サイト側で favicon を変えたら、ここも差し替える)
+ */
+function SonglistIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden>
+      <path d="m17.33 4.055 2.986.996a1 1 0 0 1-.632 1.898L18 6.387V17.5a3.5 3.5 0 1 1-2-3.163V5.014c0-.69.675-1.177 1.33-.959M8 17a1 1 0 1 1 0 2H4a1 1 0 0 1 0-2zm2-6a1 1 0 1 1 0 2H4a1 1 0 0 1 0-2zm3-6a1 1 0 0 1 .117 1.993L13 7H4a1 1 0 0 1-.117-1.993L4 5z" />
+    </svg>
   );
 }
 
