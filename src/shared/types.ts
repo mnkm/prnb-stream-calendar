@@ -5,6 +5,23 @@ export type Platform = 'youtube' | 'twitch';
 
 export const VIDEO_TYPES: readonly VideoType[] = ['live', 'video', 'short'];
 
+/**
+ * 画面の表示・非表示の切り替えの単位。種別に加えて、Twitch の配信を別に切り替えられる。
+ * Twitch の配信は種別では「ライブ」なので、ライブを非表示にすると Twitch も表示されない。
+ * 件数は、live が YouTube のライブ、twitch が Twitch の配信(重ねて数えない)
+ */
+export type EventFilter = VideoType | 'twitch';
+
+export const EVENT_FILTERS: readonly EventFilter[] = [...VIDEO_TYPES, 'twitch'];
+
+/** その切り替えが、実際に表示される状態か(Twitch は、ライブも表示しているときだけ) */
+export const isFilterOn = (filters: ReadonlySet<EventFilter>, key: EventFilter) =>
+  filters.has(key) && (key !== 'twitch' || filters.has('live'));
+
+/** 予定が属する切り替えの単位 */
+export const filterOf = (event: { type: VideoType; platform: Platform }): EventFilter =>
+  event.platform === 'twitch' ? 'twitch' : event.type;
+
 export interface Channel {
   id: string;
   title: string;
@@ -46,6 +63,14 @@ export interface CalendarEvent {
   publishedAt: string;
   /** メンバー限定。メンバー以外は埋め込み再生できない */
   membersOnly: boolean;
+  /** キーワード検索の結果だけに入る。セトリの中で、検索語に当たった曲(セトリの順) */
+  matchedSongs?: MatchedSong[];
+}
+
+/** 検索語に当たった、セトリの中の曲 */
+export interface MatchedSong {
+  title: string;
+  artist: string | null;
 }
 
 /** Twitch のクリップ(視聴者などが配信から切り出した短い動画) */
@@ -77,8 +102,8 @@ export interface SearchPage {
   events: CalendarEvent[];
   /** 次のページを取るときに cursor に渡す値。最後のページなら null */
   nextCursor: string | null;
-  /** 種別ごとの一致件数(種別の絞り込み前)。最初のページだけに入る */
-  counts?: Record<VideoType, number>;
+  /** 切り替えの単位ごとの一致件数(種別・Twitch の絞り込み前)。最初のページだけに入る */
+  counts?: Record<EventFilter, number>;
 }
 
 /** 歌枠のセトリ(コメントの原文)。読み取りは src/shared/setlist.ts の parseSetlist で行う */

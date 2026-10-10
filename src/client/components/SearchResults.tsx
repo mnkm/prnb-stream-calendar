@@ -2,7 +2,14 @@ import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
 import { LoaderCircle, SearchX } from 'lucide-react';
 import { useEffect, useMemo, useRef } from 'react';
-import { type CalendarEvent, type Channel, VIDEO_TYPES, type VideoType } from '../../shared/types';
+import {
+  type CalendarEvent,
+  type Channel,
+  EVENT_FILTERS,
+  type EventFilter,
+  VIDEO_TYPES,
+  isFilterOn,
+} from '../../shared/types';
 import { dayKey } from '../lib/calendar';
 import { EventRow } from './EventRow';
 import { ScrollToTop } from './ScrollToTop';
@@ -16,15 +23,16 @@ interface Props {
   terms: string[];
   /** ここまでに読み込んだ結果(種別・チャンネルの絞り込み済み、新しい順) */
   events: CalendarEvent[];
-  /** 種別ごとの一致件数(種別の絞り込み前)。読み込み前は undefined */
-  counts?: Record<VideoType, number>;
+  /** 切り替えの単位ごとの一致件数(種別・Twitch の絞り込み前)。読み込み前は undefined */
+  counts?: Record<EventFilter, number>;
   isLoading: boolean;
   isError: boolean;
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
   onLoadMore: () => void;
-  types: ReadonlySet<VideoType>;
-  onToggleType: (type: VideoType) => void;
+  types: ReadonlySet<EventFilter>;
+  onToggleType: (type: EventFilter) => void;
+  showTwitch: boolean;
   channelMap: Map<string, Channel>;
   showChannelColor: boolean;
   onSelectEvent: (event: CalendarEvent) => void;
@@ -46,11 +54,12 @@ export function SearchResults({
   onLoadMore,
   types,
   onToggleType,
+  showTwitch,
   channelMap,
   showChannelColor,
   onSelectEvent,
 }: Props) {
-  const total = counts ? VIDEO_TYPES.reduce((sum, t) => sum + (types.has(t) ? counts[t] : 0), 0) : null;
+  const total = counts ? EVENT_FILTERS.reduce((sum, t) => sum + (isFilterOn(types, t) ? counts[t] : 0), 0) : null;
 
   const days = useMemo(() => {
     const groups: { key: string; date: Date; events: CalendarEvent[] }[] = [];
@@ -87,7 +96,12 @@ export function SearchResults({
             {isLoading || total === null ? '検索中…' : `${total.toLocaleString()} 件`}
           </p>
         </div>
-        <TypeFilters types={types} counts={counts ?? { live: 0, video: 0, short: 0 }} onToggle={onToggleType} />
+        <TypeFilters
+          types={types}
+          counts={counts ?? { live: 0, video: 0, short: 0, twitch: 0 }}
+          onToggle={onToggleType}
+          showTwitch={showTwitch}
+        />
       </div>
 
       {isError && (
@@ -100,7 +114,7 @@ export function SearchResults({
         <div className="grid place-items-center gap-3 rounded-3xl border border-dashed border-line py-24 text-muted">
           <SearchX className="size-8" aria-hidden />
           <p className="text-sm">
-            {types.size === 0 ? '表示する種別を選んでください' : '一致する動画・配信はありません'}
+            {VIDEO_TYPES.some((t) => types.has(t)) ? '一致する動画・配信はありません' : '表示する種別を選んでください'}
           </p>
         </div>
       )}

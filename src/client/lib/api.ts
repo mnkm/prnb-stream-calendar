@@ -36,13 +36,14 @@ export const eventsQuery = (from: Date, to: Date) =>
   });
 
 /** キーワード検索。50 件ずつ取り、続きは前のページの nextCursor で取る */
-export const searchQuery = (q: string, types: VideoType[], channelIds: string[]) =>
+export const searchQuery = (q: string, types: VideoType[], channelIds: string[], includeTwitch: boolean) =>
   infiniteQueryOptions({
-    queryKey: ['search', q, types, channelIds],
+    queryKey: ['search', q, types, channelIds, includeTwitch],
     queryFn: ({ pageParam }) => {
       const params = new URLSearchParams({ q });
       // 全種別・全チャンネルのときは絞り込まない
       if (types.length < VIDEO_TYPES.length) params.set('types', types.join(','));
+      if (!includeTwitch) params.set('twitch', '0');
       if (channelIds.length > 0) params.set('channels', channelIds.join(','));
       if (pageParam) params.set('cursor', pageParam);
       return getJson<SearchPage>(`/api/search?${params}`);

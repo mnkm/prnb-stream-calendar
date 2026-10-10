@@ -1,4 +1,4 @@
-import { countTimestamps } from '../shared/setlist';
+import { SETLIST_PARSER_VERSION, countTimestamps, parseSetlist } from '../shared/setlist';
 import { auditSetlist, problemSignature } from '../shared/setlist-audit';
 import type { LiveStatus } from '../shared/types';
 import { RequestBudget, countD1 } from './budget';
@@ -20,6 +20,7 @@ import {
   findSetlistAuditsToNotify,
   findSetlistTargets,
   findSetlistsToAudit,
+  findSetlistsToParse,
   findExistingVideoIds,
   linkTwitchArchiveStmt,
   listEnabledChannels,
@@ -38,6 +39,7 @@ import {
   saveBackfillProgress,
   saveMembersScanProgress,
   saveSetlistAuditStmts,
+  saveSetlistSongsStmt,
   saveSetlistStmt,
   savePremieresScanProgress,
   saveTwitchClipsBackfillStmt,
@@ -102,6 +104,8 @@ const SETLIST_CHECK_HOURS = [1, 6, 24, 72, 168];
 const SETLIST_COMMENTS = 20;
 /** セトリとみなすコメントに含まれるタイムスタンプの数 */
 const SETLIST_MIN_TIMESTAMPS = 3;
+/** 1 回の実行で、検索用に曲を読み取って保存するセトリの数(読み取りは 1 本 0.3ms ほど) */
+const SETLIST_PARSES_PER_RUN = 20;
 /** 1 回の実行で点検するセトリの数(読み取りは 1 本 0.3ms ほど) */
 const SETLIST_AUDITS_PER_RUN = 20;
 /** セトリの点検の Issue を作る時刻(JST)。この時刻を過ぎた最初の実行で、1 日 1 回まで作る */
@@ -222,6 +226,13 @@ export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
     await checkSetlists(db, yt, budget);
   } catch (err) {
     console.error('checkSetlists failed', err);
+  }
+
+  // 検索で曲名・アーティストも探せるよう、セトリから曲を読み取って保存する(新しく見つかったもの、読み取りの規則が変わったもの)
+  try {
+    await parseSetlistSongs(db, budget);
+  } catch (err) {
+    console.error('parseSetlistSongs failed', err);
   }
 
   // 4. 取得したセトリを点検し、問題があれば 1 日 1 回 GitHub の Issue で知らせる
@@ -754,6 +765,22 @@ function nextSetlistCheck(endedAt: string, now: Date): string | null {
   const ended = Date.parse(endedAt);
   const next = SETLIST_CHECK_HOURS.map((h) => ended + h * 3600_000).find((t) => t > now.getTime());
   return next === undefined ? null : toIsoSeconds(new Date(next));
+}
+
+/**
+ * セトリから曲(曲名・アーティスト)を読み取って保存する。表示と同じ読み取り(parseSetlist)を使うので、
+ * 検索に当たるのは画面に出るセトリと同じ内容になる(読み取り 1 回 + 書き込み 1 回)
+ */
+async function parseSetlistSongs(db: D1Database, budget: RequestBudget) {
+  if (budget.remaining < 2) return;
+  const rows = await findSetlistsToParse(db, SETLIST_PARSER_VERSION, SETLIST_PARSES_PER_RUN);
+  await writeBatch(
+    db,
+    rows.map((row) => {
+      const songs = parseSetlist(row.text).map(({ title, artist }) => ({ title, artist }));
+      return saveSetlistSongsStmt(db, row.video_id, songs, SETLIST_PARSER_VERSION);
+    }),
+  );
 }
 
 /** 取得・確認してからまだ点検していないセトリを、表示と同じ読み取りで点検する(読み取り 1 回 + 書き込み 1 回) */
