@@ -97,13 +97,13 @@ function ChannelProfile({
   onBack?: () => void;
   onOpenPlaylist: (playlist: { id: string }) => void;
 }) {
-  // 再生リストを先に見せる(説明文などは「チャンネル情報」タブ)
-  const [tab, setTab] = useState<'playlists' | 'clips' | 'about'>('playlists');
+  // 先頭の「チャンネル情報」(説明文)を最初に開く
+  const [tab, setTab] = useState<'about' | 'playlists' | 'clips'>('about');
   // 「クリップ」タブは、Twitch にもチャンネルがある場合だけ出す
   const tabs = [
+    ['about', 'チャンネル情報'],
     ['playlists', '再生リスト'],
     ...(channel.twitchLogin ? ([['clips', 'クリップ']] as const) : []),
-    ['about', 'チャンネル情報'],
   ] as const;
   const channelUrl = channel.customUrl
     ? `https://www.youtube.com/${channel.customUrl}`
