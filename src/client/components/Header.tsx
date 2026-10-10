@@ -112,8 +112,8 @@ function SearchBar({ value, onChange, onClose }: SearchProps) {
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => e.key === 'Escape' && onClose()}
-          placeholder="タイトルで検索(スペースで区切ると絞り込み)"
-          aria-label="タイトルで検索"
+          placeholder="キーワードで検索(スペースで区切ると絞り込み)"
+          aria-label="キーワードで検索"
           className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted [&::-webkit-search-cancel-button]:hidden"
         />
         {value && (
