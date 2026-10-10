@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CalendarEvent, Channel } from '../../shared/types';
 import { formatTime } from '../lib/format';
 import { TYPE_META } from '../lib/meta';
-import { LiveDot } from './Badges';
+import { LiveDot, TwitchMark } from './Badges';
 import { Thumbnail } from './Thumbnail';
 
 const HOUR_PX = 52;
@@ -227,6 +227,7 @@ function EventBlock({
             <span className={clsx('shrink-0 tabular-nums opacity-75', !dayView && 'hidden sm:inline')}>
               {formatTime(event.eventAt)}
             </span>
+            {event.platform === 'twitch' && <TwitchMark />}
             {event.membersOnly && <Crown className="size-3 shrink-0 text-member" aria-label="メンバー限定" />}
           </div>
           <p className={clsx('font-medium break-all text-ink/85', dayView ? 'line-clamp-2 text-xs' : 'line-clamp-3')}>

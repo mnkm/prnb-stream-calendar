@@ -1,6 +1,8 @@
 export type VideoType = 'video' | 'short' | 'live';
 export type LiveStatus = 'upcoming' | 'live' | 'ended';
 
+export type Platform = 'youtube' | 'twitch';
+
 export const VIDEO_TYPES: readonly VideoType[] = ['live', 'video', 'short'];
 
 export interface Channel {
@@ -17,11 +19,18 @@ export interface Channel {
   /** 登録者数。非公開なら null */
   subscriberCount: number | null;
   videoCount: number | null;
+  /** Twitch にもチャンネルがある場合のログイン名(twitch.tv/◯◯ の部分) */
+  twitchLogin: string | null;
+  twitchFollowerCount: number | null;
 }
 
 export interface CalendarEvent {
+  /** YouTube は動画 ID、Twitch は 'twitch:' + 配信の ID */
   id: string;
   channelId: string;
+  platform: Platform;
+  /** Twitch のアーカイブの動画 ID。配信中でまだ無い・保存されていない・公開が終わった場合は null */
+  twitchVideoId: string | null;
   type: VideoType;
   liveStatus: LiveStatus | null;
   title: string;
@@ -33,6 +42,30 @@ export interface CalendarEvent {
   publishedAt: string;
   /** メンバー限定。メンバー以外は埋め込み再生できない */
   membersOnly: boolean;
+}
+
+/** Twitch のクリップ(視聴者などが配信から切り出した短い動画) */
+export interface Clip {
+  id: string;
+  channelId: string;
+  /** 元の配信(CalendarEvent の id)。カレンダーに無い配信のクリップは null */
+  eventId: string | null;
+  title: string;
+  /** クリップを作った人 */
+  creatorName: string | null;
+  viewCount: number;
+  durationSec: number | null;
+  thumbnailUrl: string | null;
+  createdAt: string;
+}
+
+export type ClipSort = 'popular' | 'new';
+
+/** チャンネルのクリップの 1 ページ分 */
+export interface ClipPage {
+  clips: Clip[];
+  /** 次のページを取るときに offset に渡す値。最後のページなら null */
+  nextOffset: number | null;
 }
 
 /** キーワード検索の 1 ページ分(新しい順) */

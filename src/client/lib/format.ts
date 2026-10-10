@@ -1,6 +1,6 @@
 import { format, isSameDay, roundToNearestMinutes } from 'date-fns';
 import { ja } from 'date-fns/locale';
-import type { CalendarEvent } from '../../shared/types';
+import type { CalendarEvent, Channel } from '../../shared/types';
 
 /** 月表示・リスト表示用。配信は予定より数分遅れて始まることが多いので、5 分単位で切り捨てて見やすくする */
 export const formatTime = (iso: string) =>
@@ -26,5 +26,15 @@ export function formatDuration(totalSec: number | null): string | null {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
-export const watchUrl = (event: CalendarEvent) =>
-  event.type === 'short' ? `https://www.youtube.com/shorts/${event.id}` : `https://www.youtube.com/watch?v=${event.id}`;
+export const twitchChannelUrl = (login: string) => `https://www.twitch.tv/${encodeURIComponent(login)}`;
+
+/** Twitch は、配信中ならチャンネル、終わっていればアーカイブを開く(アーカイブが無ければチャンネル) */
+export function watchUrl(event: CalendarEvent, channel?: Channel): string {
+  if (event.platform === 'twitch') {
+    if (event.twitchVideoId && event.liveStatus !== 'live') return `https://www.twitch.tv/videos/${event.twitchVideoId}`;
+    return twitchChannelUrl(channel?.twitchLogin ?? '');
+  }
+  return event.type === 'short'
+    ? `https://www.youtube.com/shorts/${event.id}`
+    : `https://www.youtube.com/watch?v=${event.id}`;
+}

@@ -1,3 +1,6 @@
 # .dev.vars にコピーしてローカル開発で使用(.dev.vars はコミットしない)
 YOUTUBE_API_KEY=your-youtube-data-api-key
 ADMIN_TOKEN=change-me-to-a-long-random-string
+# Twitch の配信も表示する場合(無ければ Twitch は同期しない)
+TWITCH_CLIENT_ID=your-twitch-client-id
+TWITCH_CLIENT_SECRET=your-twitch-client-secret

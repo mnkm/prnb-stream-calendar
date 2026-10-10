@@ -4,8 +4,9 @@ import type { CalendarEvent } from '../../shared/types';
 
 /** 高解像度サムネイルを優先し、存在しなければ API が返した URL にフォールバック */
 export function Thumbnail({ event, hd = false, className }: { event: CalendarEvent; hd?: boolean; className?: string }) {
-  // ライブ中・予定のサムネイルは maxres が用意されないことが多いので API の URL を使う
-  const preferHd = hd && event.liveStatus !== 'live' && event.liveStatus !== 'upcoming';
+  // ライブ中・予定のサムネイルは maxres が用意されないことが多いので API の URL を使う。Twitch も API の URL だけを使う
+  const preferHd =
+    hd && event.platform === 'youtube' && event.liveStatus !== 'live' && event.liveStatus !== 'upcoming';
   const [src, setSrc] = useState(
     preferHd ? `https://i.ytimg.com/vi/${event.id}/maxresdefault.jpg` : (event.thumbnailUrl ?? ''),
   );

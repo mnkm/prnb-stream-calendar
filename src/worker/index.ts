@@ -1,10 +1,12 @@
 import { Hono } from 'hono';
 import { splitSearchTerms } from '../shared/search';
-import { VIDEO_TYPES, type VideoType } from '../shared/types';
+import { type ClipSort, VIDEO_TYPES, type VideoType } from '../shared/types';
 import {
   getPlaylistDetail,
   getSetlist,
+  listChannelClips,
   listChannelPlaylists,
+  listEventClips,
   listEnabledChannels,
   listVideoPlaylists,
   queryEvents,
@@ -16,6 +18,8 @@ import { toIsoSeconds } from './time';
 
 type Bindings = Env & {
   YOUTUBE_API_KEY: string;
+  TWITCH_CLIENT_ID?: string;
+  TWITCH_CLIENT_SECRET?: string;
   ADMIN_TOKEN?: string;
   GITHUB_TOKEN?: string;
 };
@@ -25,6 +29,8 @@ const MAX_CHANNEL_FILTER = 20;
 const SEARCH_PAGE_SIZE = 50;
 const MAX_SEARCH_TERMS = 5;
 const MAX_SEARCH_TERM_LENGTH = 50;
+const EVENT_CLIPS_LIMIT = 50;
+const CLIPS_PAGE_SIZE = 30;
 
 const app = new Hono<{ Bindings: Bindings }>().basePath('/api');
 
@@ -101,6 +107,20 @@ app.get('/playlists/:id', async (c) => {
 app.get('/videos/:id/playlists', async (c) => {
   c.header('Cache-Control', 'public, max-age=300');
   return c.json(await listVideoPlaylists(c.env.DB, c.req.param('id')));
+});
+
+/** Twitch の配信に結び付いたクリップ(再生数の多い順) */
+app.get('/videos/:id/clips', async (c) => {
+  c.header('Cache-Control', 'public, max-age=300');
+  return c.json(await listEventClips(c.env.DB, c.req.param('id'), EVENT_CLIPS_LIMIT));
+});
+
+/** チャンネルの Twitch のクリップ。sort は popular(再生数の多い順)か new(新しい順)。続きは offset に nextOffset を渡して取る */
+app.get('/channels/:id/clips', async (c) => {
+  const sort: ClipSort = c.req.query('sort') === 'new' ? 'new' : 'popular';
+  const offset = Math.max(0, Math.floor(Number(c.req.query('offset'))) || 0);
+  c.header('Cache-Control', 'public, max-age=300');
+  return c.json(await listChannelClips(c.env.DB, c.req.param('id'), sort, offset, CLIPS_PAGE_SIZE));
 });
 
 /** 手動同期(初回の取り込みや動作確認用)。Authorization: Bearer <ADMIN_TOKEN> */
