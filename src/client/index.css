@@ -9,6 +9,7 @@
   --line: rgb(24 24 27 / 0.08);
   --sun: #e11d48;
   --sat: #2563eb;
+  --tint-lightness: 0.5;
   color-scheme: light;
 }
 
@@ -23,6 +24,7 @@
     --line: rgb(255 255 255 / 0.08);
     --sun: #fb7185;
     --sat: #60a5fa;
+    --tint-lightness: 0.82;
     color-scheme: dark;
   }
 }
@@ -37,6 +39,7 @@
   --line: rgb(255 255 255 / 0.08);
   --sun: #fb7185;
   --sat: #60a5fa;
+  --tint-lightness: 0.82;
   color-scheme: dark;
 }
 
@@ -69,6 +72,29 @@ body {
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
   font-feature-settings: 'palt';
+}
+
+/*
+ * チャンネルの色で表すボタン(「楽曲リストを開く」)。--channel-color にチャンネルの色を渡す。
+ * 登録されている色は明るい色が多く、そのまま文字に使うと白い背景で読めないので、種別のボタン
+ * (ライブ・動画・ショート)と同じく、薄い背景・半透明の枠線・濃い文字の組み合わせにする。
+ * 文字は、色相と鮮やかさを保ったまま、明るさだけをテーマに合わせる(--tint-lightness)
+ */
+.channel-tint {
+  border-color: color-mix(in oklab, var(--channel-color) 45%, transparent);
+  background: color-mix(in oklab, var(--channel-color) 12%, transparent);
+  /* 下の書き方に対応していないブラウザでは、文字の基本色と混ぜて読める濃さにする */
+  color: color-mix(in oklab, var(--channel-color) 50%, var(--ink));
+}
+
+@supports (color: oklch(from red l c h)) {
+  .channel-tint {
+    color: oklch(from var(--channel-color) var(--tint-lightness) c h);
+  }
+}
+
+.channel-tint:hover {
+  background: color-mix(in oklab, var(--channel-color) 20%, transparent);
 }
 
 /* 背景のやわらかいグラデーション */

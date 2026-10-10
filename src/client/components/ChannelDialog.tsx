@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { ArrowLeft, ChevronRight } from 'lucide-react';
-import { useState } from 'react';
+import { type CSSProperties, useState } from 'react';
 import type { CalendarEvent, Channel } from '../../shared/types';
 import { twitchChannelUrl } from '../lib/format';
 import { TwitchIcon } from './Badges';
@@ -177,13 +177,14 @@ function ChannelProfile({
               Twitch で開く
             </a>
           )}
-          {/* 配信サイトへのリンクと区別できるよう、枠線だけのボタンにする */}
+          {/* 配信サイトへのリンクと区別できるよう、チャンネルの色の薄いボタンにする(色の調整は index.css の .channel-tint) */}
           {channel.songlistTalent && (
             <a
               href={`${SONGLIST_URL}?${new URLSearchParams({ talent: channel.songlistTalent })}`}
               target="_blank"
               rel="noreferrer"
-              className="col-span-full flex items-center justify-center gap-1.5 rounded-full border border-line px-3 py-2.5 text-sm font-medium whitespace-nowrap transition hover:bg-ink/5"
+              style={{ '--channel-color': channel.color } as CSSProperties}
+              className="channel-tint col-span-full flex items-center justify-center gap-1.5 rounded-full border px-3 py-2.5 text-sm font-medium whitespace-nowrap transition"
             >
               <SonglistIcon className="size-4 shrink-0" />
               楽曲リストを開く
