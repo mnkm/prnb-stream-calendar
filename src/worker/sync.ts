@@ -7,13 +7,15 @@ import {
   type ChannelRow,
   type TwitchArchiveRow,
   type VideoRow,
+  availabilityStmts,
   clearExpiredTwitchArchivesStmt,
   clearTwitchToken,
   deletePlaylistsStmt,
   deleteVideosStmt,
   endTwitchLivesStmt,
   fillSearchTitles,
-  findActiveLiveIds,
+  findActiveLives,
+  findAvailabilityTargets,
   findPendingPlaylist,
   findSetlistAuditsToNotify,
   findSetlistTargets,
@@ -30,6 +32,7 @@ import {
   markShortsStmt,
   markTwitchClipsSyncedStmt,
   markTwitchSyncedStmt,
+  markVanishedLivesStmt,
   playlistItemsPageStmts,
   readTwitchState,
   saveBackfillProgress,
@@ -39,6 +42,7 @@ import {
   savePremieresScanProgress,
   saveTwitchClipsBackfillStmt,
   saveTwitchTokenStmt,
+  twitchClipCheckStmts,
   twitchEventId,
   updateChannelProfile,
   upsertPlaylistStmt,
@@ -112,9 +116,17 @@ const PLAYLIST_PAGES_PER_RUN = 8;
 const PROFILE_REFRESH_MS = 24 * 60 * 60 * 1000;
 /**
  * Twitch の同期に必要なサブリクエスト数の上限。
- * D1 2 回(読み取り 1・書き込み 1)+ Twitch 6 回(トークン・配信中・ユーザー ID・フォロワー数・アーカイブ・クリップ)
+ * D1 2 回(読み取り 1・書き込み 1)+ Twitch 7 回(トークン・配信中・ユーザー ID・フォロワー数・アーカイブ・クリップ・クリップの確認)
  */
-const TWITCH_REQUESTS = 8;
+const TWITCH_REQUESTS = 9;
+/** 1 回の実行で、今もあるかを確認するクリップの数(ID を URL に並べるので、長くなりすぎない数にする) */
+const TWITCH_CLIP_CHECKS_PER_RUN = 50;
+/** クリップが今もあるかを確認し直す間隔 */
+const TWITCH_CLIP_CHECK_REFRESH_MS = 24 * 60 * 60 * 1000;
+/** 1 回の実行で、今も再生できるかを確認する YouTube の動画の数(videos.list の 1 回分) */
+const AVAILABILITY_CHECKS_PER_RUN = 50;
+/** YouTube の動画が今も再生できるかを確認し直す間隔 */
+const AVAILABILITY_REFRESH_MS = 24 * 60 * 60 * 1000;
 /** 最近のクリップを確認し直す間隔(チャンネルごと) */
 const TWITCH_CLIPS_REFRESH_MS = 60 * 60 * 1000;
 /** 最近のクリップとして確認する期間。この期間に作られたクリップは、再生数も新しくなる */
@@ -225,6 +237,13 @@ export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
     await syncPlaylists(db, yt, budget, channels);
   } catch (err) {
     console.error('syncPlaylists failed', err);
+  }
+
+  // 6. 残りの予算で、取り込み済みの YouTube の動画が今も再生できるかを、古いものから順に確認する
+  try {
+    await checkAvailability(db, yt, budget);
+  } catch (err) {
+    console.error('checkAvailability failed', err);
   }
 
   // 検索用の列を追加する前に登録した行を埋める(全部埋まっていれば読み取り 1 回だけ)
@@ -344,7 +363,8 @@ async function incrementalSync(db: D1Database, yt: YouTubeClient, channel: Chann
 
   const known = await findExistingVideoIds(db, candidateIds);
   const newIds = candidateIds.filter((id) => !known.has(id));
-  const activeLiveIds = await findActiveLiveIds(db, channel.id);
+  const activeLives = await findActiveLives(db, channel.id);
+  const activeLiveIds = activeLives.map((r) => r.id);
   const targetIds = [...new Set([...newIds, ...activeLiveIds])];
 
   const shortsPage = await yt.listPlaylistPage(shortsPlaylistId(channel.id));
@@ -366,9 +386,12 @@ async function incrementalSync(db: D1Database, yt: YouTubeClient, channel: Chann
     }
   }
 
-  // 予定枠が削除・非公開化された場合は videos.list に返ってこないので、カレンダーからも消す
+  // 削除・非公開化されたものは videos.list に返ってこない。始まらないまま消えた予定枠は、中止された予定なので
+  // カレンダーからも消す。配信中に消えたもの(配信のあとすぐ非公開にされた配信)は、記録を残して再生できないものにする
   const returned = new Set(videos.map((v) => v.id));
-  const removedIds = activeLiveIds.filter((id) => !returned.has(id));
+  const vanished = activeLives.filter((r) => !returned.has(r.id));
+  const removedIds = vanished.filter((r) => r.live_status === 'upcoming').map((r) => r.id);
+  const hiddenIds = vanished.filter((r) => r.live_status === 'live').map((r) => r.id);
 
   // 書き込みは 1 回の batch にまとめる。UUSH / UULF / UUMO の先頭ページで、
   // 反映が遅れて誤った種別で登録されたものも後から補正する
@@ -379,6 +402,7 @@ async function incrementalSync(db: D1Database, yt: YouTubeClient, channel: Chann
     markPremieresStmt(db, videosPage?.ids ?? []),
     markMembersOnlyStmt(db, membersPage?.ids ?? []),
     deleteVideosStmt(db, removedIds),
+    markVanishedLivesStmt(db, hiddenIds, now),
     markChannelSyncedStmt(db, channel.id, now),
   ]);
   return { channelId: channel.id, mode: 'incremental', upserted: videos.length, removed: removedIds.length };
@@ -467,6 +491,40 @@ function toVideoRow(v: YtVideo, isShort: boolean, inVideosTab: boolean): VideoRo
 const nowIso = () => toIsoSeconds(new Date());
 
 /**
+ * 取り込み済みの YouTube の動画が今も再生できるかを確認する(1 回の実行で 50 本、1 unit)。
+ * 非公開・削除された動画は videos.list に返ってこないので、2 回続けて返ってこなければ再生できないものとして印を付け、
+ * 再び返ってくるようになれば元に戻す。限定公開になったかどうかも残す。各動画を 1 日 1 回確認する
+ */
+async function checkAvailability(db: D1Database, yt: YouTubeClient, budget: RequestBudget) {
+  // 対象の読み取り 1 回 + videos.list 1 回 + 書き込み 1 回
+  if (budget.remaining < 3) return;
+  const now = new Date();
+  const before = toIsoSeconds(new Date(now.getTime() - AVAILABILITY_REFRESH_MS));
+  const targets = await findAvailabilityTargets(db, before, AVAILABILITY_CHECKS_PER_RUN);
+  if (targets.length === 0) return;
+
+  // 取得に失敗したとき(クォータ超過など)は例外になるので、返ってこなかったことにはならない
+  const videos = await yt.getVideos(targets.map((t) => t.id));
+  const found = new Map(videos.map((v) => [v.id, v]));
+  const stamp = toIsoSeconds(now);
+  const isUnlisted = (v: YtVideo) => v.status?.privacyStatus === 'unlisted';
+  // 再び公開されたものは、配信の状態や長さも取り直す
+  const restored = targets.flatMap((t) => (t.unavailable_at && found.has(t.id) ? [found.get(t.id)!] : []));
+  await writeBatch(db, [
+    ...upsertVideoStmts(db, restored.map((v) => toVideoRow(v, false, false)), stamp),
+    ...availabilityStmts(
+      db,
+      {
+        publicIds: videos.filter((v) => !isUnlisted(v)).map((v) => v.id),
+        unlistedIds: videos.filter(isUnlisted).map((v) => v.id),
+        missingIds: targets.filter((t) => !found.has(t.id)).map((t) => t.id),
+      },
+      stamp,
+    ),
+  ]);
+}
+
+/**
  * Twitch の同期。配信中のライブは全チャンネル分を 1 回で確認し、アーカイブは 1 回の実行で 1 チャンネルずつ確認する
  * (配信が終わったばかりのチャンネルを先に、あとは最後に確認してから時間がたった順)。
  * Twitch には待機所が無いので、配信予定は取り込まない
@@ -479,7 +537,11 @@ async function syncTwitch(db: D1Database, budget: RequestBudget, env: SyncEnv, c
   const tw = new TwitchClient(env.TWITCH_CLIENT_ID, env.TWITCH_CLIENT_SECRET, budget);
   const now = new Date();
   const stamp = toIsoSeconds(now);
-  const state = await readTwitchState(db);
+  const state = await readTwitchState(
+    db,
+    toIsoSeconds(new Date(now.getTime() - TWITCH_CLIP_CHECK_REFRESH_MS)),
+    TWITCH_CLIP_CHECKS_PER_RUN,
+  );
   const stmts: (D1PreparedStatement | null)[] = [];
 
   if (state.token && Date.parse(state.token.expires_at) - now.getTime() > TWITCH_TOKEN_MARGIN_MS) {
@@ -525,6 +587,18 @@ async function syncTwitch(db: D1Database, budget: RequestBudget, env: SyncEnv, c
     } catch (err) {
       if (err instanceof TwitchApiError && err.status === 401) throw err;
       console.warn('twitch clips failed', err);
+    }
+
+    // 取り込み済みのクリップが今もあるかを確認し、削除されたものを一覧から外す
+    if (state.clipIdsToCheck.length > 0) {
+      try {
+        const existing = await tw.getExistingClipIds(state.clipIdsToCheck);
+        const missing = state.clipIdsToCheck.filter((id) => !existing.has(id));
+        stmts.push(...twitchClipCheckStmts(db, [...existing], missing, stamp));
+      } catch (err) {
+        if (err instanceof TwitchApiError && err.status === 401) throw err;
+        console.warn('twitch clip check failed', err);
+      }
     }
   } catch (err) {
     // トークンが取り消されていたら消して、次の実行で取り直す
@@ -634,7 +708,7 @@ async function twitchArchiveStmts(
   }
   stmts.push(...upsertTwitchArchiveStmts(db, rows, stamp));
   // 全部見られたときだけ、一覧に無いアーカイブを「公開が終わった」とみなす
-  if (full && !hasMore) stmts.push(clearExpiredTwitchArchivesStmt(db, channel.id, archives.map((a) => a.id)));
+  if (full && !hasMore) stmts.push(clearExpiredTwitchArchivesStmt(db, channel.id, archives.map((a) => a.id), stamp));
   stmts.push(markTwitchSyncedStmt(db, channel.id, full ? { userId: userId!, followerCount } : null, stamp));
   return stmts;
 }

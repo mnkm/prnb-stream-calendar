@@ -5,6 +5,7 @@ import clsx from 'clsx';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CalendarEvent, Playlist } from '../../shared/types';
 import { channelPlaylistsQuery, playlistQuery, videoPlaylistsQuery } from '../lib/api';
+import { AvailabilityMark } from './Badges';
 import { Thumbnail } from './Thumbnail';
 
 /** 再生リストの中身で、一度に見せる動画の数 */
@@ -179,6 +180,7 @@ export function PlaylistDetailView({
                     <span className="flex items-center gap-1 text-[11px] text-muted tabular-nums">
                       {format(new Date(event.eventAt), 'yyyy/MM/dd')}
                       {event.membersOnly && <Crown className="size-3 text-member" aria-label="メンバー限定" />}
+                      <AvailabilityMark event={event} />
                     </span>
                   </span>
                 </button>

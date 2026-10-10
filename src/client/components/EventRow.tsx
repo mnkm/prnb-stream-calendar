@@ -2,7 +2,7 @@ import clsx from 'clsx';
 import type { CalendarEvent } from '../../shared/types';
 import { formatDuration, formatTime } from '../lib/format';
 import { Highlight } from './Highlight';
-import { LiveStatusBadge, MembersOnlyBadge, PlatformBadge, TypeBadge } from './Badges';
+import { AvailabilityBadge, LiveStatusBadge, MembersOnlyBadge, PlatformBadge, TypeBadge } from './Badges';
 import { Thumbnail } from './Thumbnail';
 
 /** リスト表示・日別ダイアログで使う 1 行 */
@@ -29,7 +29,8 @@ export function EventRow({
       )}
     >
       <div className="relative w-32 shrink-0 sm:w-44">
-        <Thumbnail event={event} className="aspect-video rounded-xl" />
+        {/* 再生できなくなったものは、サムネイルとタイトルを薄くする */}
+        <Thumbnail event={event} className={clsx('aspect-video rounded-xl', event.unavailableAt && 'opacity-50')} />
         {duration && (
           <span className="absolute right-1.5 bottom-1.5 rounded bg-black/75 px-1 py-px text-[10px] font-medium text-white tabular-nums">
             {duration}
@@ -43,9 +44,15 @@ export function EventRow({
           <LiveStatusBadge event={event} />
           <PlatformBadge event={event} />
           <MembersOnlyBadge event={event} />
+          <AvailabilityBadge event={event} />
           {channelColor && <span className="size-2 rounded-full" style={{ background: channelColor }} />}
         </div>
-        <p className="line-clamp-2 text-sm leading-snug font-medium text-ink/90 group-hover:text-ink">
+        <p
+          className={clsx(
+            'line-clamp-2 text-sm leading-snug font-medium group-hover:text-ink',
+            event.unavailableAt ? 'text-muted' : 'text-ink/90',
+          )}
+        >
           <Highlight text={event.title} terms={highlight} />
         </p>
       </div>

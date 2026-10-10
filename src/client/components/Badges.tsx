@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { Crown } from 'lucide-react';
+import { Crown, EyeOff, Link2 } from 'lucide-react';
 import type { CalendarEvent } from '../../shared/types';
 import { LIVE_STATUS_LABEL, TYPE_META } from '../lib/meta';
 
@@ -63,6 +63,32 @@ export function PlatformBadge({ event }: { event: CalendarEvent }) {
       Twitch
     </span>
   );
+}
+
+/** 取り込んだあとに再生できなくなった(非公開・削除・公開終了)もの、限定公開になったものに付ける印 */
+export function AvailabilityBadge({ event }: { event: CalendarEvent }) {
+  if (event.unavailableAt) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-ink/10 px-2 py-0.5 text-[11px] font-medium text-muted">
+        <EyeOff className="size-3" aria-hidden />
+        再生不可
+      </span>
+    );
+  }
+  if (!event.unlisted) return null;
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[11px] font-medium text-muted">
+      <Link2 className="size-3" aria-hidden />
+      限定公開
+    </span>
+  );
+}
+
+/** カレンダーのチップやブロックに付ける、再生不可・限定公開の小さな印 */
+export function AvailabilityMark({ event }: { event: CalendarEvent }) {
+  if (event.unavailableAt) return <EyeOff className="size-3 shrink-0 text-muted" aria-label="再生不可" />;
+  if (event.unlisted) return <Link2 className="size-3 shrink-0 text-muted" aria-label="限定公開" />;
+  return null;
 }
 
 export function MembersOnlyBadge({ event }: { event: CalendarEvent }) {

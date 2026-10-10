@@ -31,6 +31,10 @@ export interface CalendarEvent {
   platform: Platform;
   /** Twitch のアーカイブの動画 ID。配信中でまだ無い・保存されていない・公開が終わった場合は null */
   twitchVideoId: string | null;
+  /** 取り込んだあとに再生できなくなった(非公開・削除・公開終了)と確認した日時。再生できるなら null */
+  unavailableAt: string | null;
+  /** YouTube で限定公開になっている */
+  unlisted: boolean;
   type: VideoType;
   liveStatus: LiveStatus | null;
   title: string;
