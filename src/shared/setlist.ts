@@ -203,6 +203,12 @@ function setlistSection(lines: string[]): string[] | null {
   return end < 0 ? rest : rest.slice(0, end);
 }
 
+/**
+ * 読み取りの規則の版。検索用に、読み取った曲を DB に保存している(setlists.songs)ので、
+ * 読み取りの結果が変わるように規則を直したときは、この数を 1 つ増やす(同期のときに全部を読み取り直す)
+ */
+export const SETLIST_PARSER_VERSION = 1;
+
 export function parseSetlist(raw: string): SetlistSong[] {
   const lines = raw.replace(/\r/g, '').split('\n').map((l) => l.trim());
   const section = setlistSection(lines);

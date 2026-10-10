@@ -1,9 +1,13 @@
 import clsx from 'clsx';
-import type { CalendarEvent } from '../../shared/types';
+import { Music } from 'lucide-react';
+import type { CalendarEvent, MatchedSong } from '../../shared/types';
 import { formatDuration, formatTime } from '../lib/format';
 import { Highlight } from './Highlight';
 import { AvailabilityBadge, LiveStatusBadge, MembersOnlyBadge, PlatformBadge, TypeBadge } from './Badges';
 import { Thumbnail } from './Thumbnail';
+
+/** 検索結果で、1 件に出す「当たった曲」の数(残りは「ほか N 曲」) */
+const MAX_MATCHED_SONGS = 3;
 
 /** リスト表示・日別ダイアログで使う 1 行 */
 export function EventRow({
@@ -55,7 +59,34 @@ export function EventRow({
         >
           <Highlight text={event.title} terms={highlight} />
         </p>
+        {event.matchedSongs && <MatchedSongs songs={event.matchedSongs} terms={highlight} />}
       </div>
     </button>
+  );
+}
+
+/** 検索語がセトリの曲に当たったときに、タイトルの下に出す曲の一覧 */
+function MatchedSongs({ songs, terms }: { songs: MatchedSong[]; terms?: string[] }) {
+  const rest = songs.length - MAX_MATCHED_SONGS;
+  return (
+    <ul className="flex flex-col gap-0.5 text-xs leading-snug text-muted">
+      {songs.slice(0, MAX_MATCHED_SONGS).map((song, i) => (
+        <li key={i} className="flex min-w-0 items-baseline gap-1">
+          <Music className="size-3 shrink-0 translate-y-0.5" aria-hidden />
+          <span className="min-w-0 truncate">
+            <span className="font-medium text-ink/80">
+              <Highlight text={song.title} terms={terms} />
+            </span>
+            {song.artist && (
+              <>
+                {' / '}
+                <Highlight text={song.artist} terms={terms} />
+              </>
+            )}
+          </span>
+        </li>
+      ))}
+      {rest > 0 && <li className="pl-4">ほか {rest} 曲</li>}
+    </ul>
   );
 }

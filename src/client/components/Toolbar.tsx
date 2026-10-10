@@ -1,10 +1,11 @@
 import clsx from 'clsx';
-import type { ReactNode } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import { format } from 'date-fns';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { type Channel, VIDEO_TYPES, type VideoType } from '../../shared/types';
+import { type Channel, EVENT_FILTERS, type EventFilter, isFilterOn } from '../../shared/types';
 import type { ViewMode } from '../lib/calendar';
 import { TYPE_META } from '../lib/meta';
+import { TwitchIcon } from './Badges';
 
 interface Props {
   month: Date;
@@ -13,9 +14,9 @@ interface Props {
   onNext: () => void;
   onToday: () => void;
   isFetching: boolean;
-  types: ReadonlySet<VideoType>;
-  counts: Record<VideoType, number>;
-  onToggleType: (type: VideoType) => void;
+  types: ReadonlySet<EventFilter>;
+  counts: Record<EventFilter, number>;
+  onToggleType: (type: EventFilter) => void;
   channels: Channel[];
   hiddenChannels: ReadonlySet<string>;
   onToggleChannel: (id: string) => void;
@@ -66,7 +67,12 @@ export function Toolbar(props: Props) {
       </div>
 
       <div className="flex flex-col gap-2 lg:items-end">
-        <TypeFilters types={props.types} counts={props.counts} onToggle={props.onToggleType} />
+        <TypeFilters
+          types={props.types}
+          counts={props.counts}
+          onToggle={props.onToggleType}
+          showTwitch={channels.some((ch) => ch.twitchLogin)}
+        />
 
         {/* 2 チャンネル目を登録すると自動で表示される */}
         {channels.length > 1 && (
@@ -98,35 +104,52 @@ export function Toolbar(props: Props) {
   );
 }
 
-/** 種別ごとの表示切り替え(件数付き)。検索結果でも使う */
+/** 切り替えのボタンに出す名前・アイコン・表示中の色。種別のあとに Twitch を並べる */
+const FILTER_META: Record<EventFilter, { label: string; icon: ComponentType<{ className?: string }>; toggleOn: string }> = {
+  ...TYPE_META,
+  twitch: { label: 'Twitch', icon: TwitchIcon, toggleOn: 'border-twitch/40 bg-twitch/12 text-twitch' },
+};
+
+/**
+ * 種別と Twitch の表示切り替え(件数付き)。検索結果でも使う。
+ * Twitch の配信は「ライブ」に含まれるので、ライブを非表示にしているあいだは Twitch も非表示になり、ボタンは押せない
+ */
 export function TypeFilters({
   types,
   counts,
   onToggle,
+  showTwitch,
 }: {
-  types: ReadonlySet<VideoType>;
-  counts: Record<VideoType, number>;
-  onToggle: (type: VideoType) => void;
+  types: ReadonlySet<EventFilter>;
+  counts: Record<EventFilter, number>;
+  onToggle: (type: EventFilter) => void;
+  /** Twitch にもチャンネルがあるものが登録されているときだけ、Twitch のボタンを出す */
+  showTwitch: boolean;
 }) {
   return (
     <div className="flex flex-wrap gap-2">
-      {VIDEO_TYPES.map((type) => {
-        const meta = TYPE_META[type];
-        const on = types.has(type);
+      {EVENT_FILTERS.filter((key) => key !== 'twitch' || showTwitch).map((key) => {
+        const meta = FILTER_META[key];
+        const on = isFilterOn(types, key);
+        // ライブを非表示にしているあいだの Twitch
+        const locked = key === 'twitch' && !types.has('live');
         const Icon = meta.icon;
         return (
           <button
-            key={type}
+            key={key}
             aria-pressed={on}
-            onClick={() => onToggle(type)}
+            disabled={locked}
+            title={locked ? 'ライブを表示すると切り替えられます' : undefined}
+            onClick={() => onToggle(key)}
             className={clsx(
               'relative flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition',
-              on ? meta.toggleOn : 'border-line text-muted hover:text-ink',
+              on ? meta.toggleOn : 'border-line text-muted',
+              locked ? 'cursor-not-allowed opacity-50' : !on && 'hover:text-ink',
             )}
           >
             <Icon className="size-3.5" aria-hidden />
             {meta.label}
-            <span className="tabular-nums opacity-70">{counts[type]}</span>
+            <span className="tabular-nums opacity-70">{counts[key]}</span>
             {!on && <OffSlash />}
           </button>
         );

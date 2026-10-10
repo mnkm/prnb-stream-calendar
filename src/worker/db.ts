@@ -6,7 +6,9 @@ import type {
   ClipPage,
   ClipSort,
   Channel,
+  EventFilter,
   LiveStatus,
+  MatchedSong,
   Platform,
   Playlist,
   PlaylistDetail,
@@ -390,6 +392,8 @@ export interface SearchQuery {
   terms: string[];
   channelIds: string[];
   types: VideoType[];
+  /** false なら Twitch の配信を除く */
+  includeTwitch: boolean;
   /** 前のページの nextCursor。最初のページなら null */
   cursor: string | null;
   limit: number;
@@ -404,51 +408,106 @@ function decodeCursor(cursor: string): { eventAt: string; id: string } | null {
 
 /**
  * タイトルに全てのキーワード(splitSearchTerms で正規化済み)を含むものを、新しい順に 1 ページ分返す。
- * 最初のページでは、種別ごとの件数(種別の絞り込み前)も数える
+ * 最初のページでは、切り替えの単位ごとの件数(種別・Twitch の絞り込み前)も数える。
+ * Twitch の配信は twitch に数え、live には入れない
  */
 export async function searchEvents(db: D1Database, q: SearchQuery): Promise<SearchPage> {
   // 入力した % と _ はワイルドカードではなく文字として扱う(エスケープ文字は !)
   const escapeLike = (s: string) => s.replace(/[!%_]/g, (c) => `!${c}`);
+  // それぞれの語が、タイトルかセトリ(曲名・アーティスト)のどこかにあれば一致とする。
   // search_title がまだ空の行は、元のタイトルで探す
-  const match = q.terms.map(() => `COALESCE(search_title, title) LIKE '%' || ? || '%' ESCAPE '!'`);
-  const matchParams: string[] = q.terms.map(escapeLike);
+  const match = q.terms.map(
+    () =>
+      `(COALESCE(v.search_title, v.title) LIKE '%' || ? || '%' ESCAPE '!' OR s.search_songs LIKE '%' || ? || '%' ESCAPE '!')`,
+  );
+  const matchParams: string[] = q.terms.flatMap((t) => [escapeLike(t), escapeLike(t)]);
   if (q.channelIds.length > 0) {
-    match.push(`channel_id IN (${placeholders(q.channelIds.length)})`);
+    match.push(`v.channel_id IN (${placeholders(q.channelIds.length)})`);
     matchParams.push(...q.channelIds);
   }
 
   const where = [...match];
   const params: (string | number)[] = [...matchParams];
   if (q.types.length > 0) {
-    where.push(`type IN (${placeholders(q.types.length)})`);
+    where.push(`v.type IN (${placeholders(q.types.length)})`);
     params.push(...q.types);
   }
+  if (!q.includeTwitch) where.push(`v.platform != 'twitch'`);
   const cursor = q.cursor ? decodeCursor(q.cursor) : null;
   if (cursor) {
-    where.push('(event_at < ? OR (event_at = ? AND id < ?))');
+    where.push('(v.event_at < ? OR (v.event_at = ? AND v.id < ?))');
     params.push(cursor.eventAt, cursor.eventAt, cursor.id);
   }
 
   const pageStmt = db
-    .prepare(`SELECT * FROM videos WHERE ${where.join(' AND ')} ORDER BY event_at DESC, id DESC LIMIT ?`)
+    .prepare(
+      `SELECT v.*, s.songs AS setlist_songs
+         FROM videos v LEFT JOIN setlists s ON s.video_id = v.id
+        WHERE ${where.join(' AND ')} ORDER BY v.event_at DESC, v.id DESC LIMIT ?`,
+    )
     .bind(...params, q.limit + 1);
   const countStmt = db
-    .prepare(`SELECT type, COUNT(*) AS n FROM videos WHERE ${match.join(' AND ')} GROUP BY type`)
+    .prepare(
+      `SELECT CASE WHEN v.platform = 'twitch' THEN 'twitch' ELSE v.type END AS filter, COUNT(*) AS n
+         FROM videos v LEFT JOIN setlists s ON s.video_id = v.id
+        WHERE ${match.join(' AND ')} GROUP BY filter`,
+    )
     .bind(...matchParams);
 
   const [page, countRows] = await Promise.all([
-    pageStmt.all<StoredVideoRow>(),
-    q.cursor ? null : countStmt.all<{ type: VideoType; n: number }>(),
+    pageStmt.all<StoredVideoRow & { setlist_songs: string | null }>(),
+    q.cursor ? null : countStmt.all<{ filter: EventFilter; n: number }>(),
   ]);
 
   const rows = page.results.slice(0, q.limit);
   const hasMore = page.results.length > q.limit;
-  let counts: Record<VideoType, number> | undefined;
+  let counts: Record<EventFilter, number> | undefined;
   if (countRows) {
-    counts = { live: 0, video: 0, short: 0 };
-    for (const { type, n } of countRows.results) counts[type] = n;
+    counts = { live: 0, video: 0, short: 0, twitch: 0 };
+    for (const { filter, n } of countRows.results) counts[filter] = n;
   }
-  return { events: rows.map(toEvent), nextCursor: hasMore ? encodeCursor(rows[rows.length - 1]) : null, counts };
+  const events = rows.map((row) => {
+    const matchedSongs = row.setlist_songs ? matchSongs(row.setlist_songs, q.terms) : [];
+    return matchedSongs.length > 0 ? { ...toEvent(row), matchedSongs } : toEvent(row);
+  });
+  return { events, nextCursor: hasMore ? encodeCursor(rows[rows.length - 1]) : null, counts };
+}
+
+/** 保存してある曲(setlists.songs の JSON)のうち、曲名かアーティストに検索語のどれかを含むもの */
+function matchSongs(songsJson: string, terms: string[]): MatchedSong[] {
+  let songs: MatchedSong[];
+  try {
+    songs = JSON.parse(songsJson) as MatchedSong[];
+  } catch {
+    return [];
+  }
+  return songs.filter((song) => {
+    const text = songSearchText(song);
+    return terms.some((t) => text.includes(t));
+  });
+}
+
+/** 1 曲分の検索用の文字列。曲名とアーティストをタブで区切る(検索語は空白を含まないので、またいで一致しない) */
+const songSearchText = (song: MatchedSong) => normalizeForSearch(`${song.title}\t${song.artist ?? ''}`);
+
+/** まだ曲を読み取っていない、または読み取りの規則が変わる前に読み取ったセトリ */
+export async function findSetlistsToParse(db: D1Database, version: number, limit: number) {
+  const { results } = await db
+    .prepare(
+      `SELECT video_id, text FROM setlists
+        WHERE text IS NOT NULL AND (songs_version IS NULL OR songs_version != ?)
+        LIMIT ?`,
+    )
+    .bind(version, limit)
+    .all<{ video_id: string; text: string }>();
+  return results;
+}
+
+/** 読み取った曲と、検索用にそろえた文字列を保存する */
+export function saveSetlistSongsStmt(db: D1Database, videoId: string, songs: MatchedSong[], version: number) {
+  return db
+    .prepare('UPDATE setlists SET songs = ?, search_songs = ?, songs_version = ? WHERE video_id = ?')
+    .bind(JSON.stringify(songs), songs.map(songSearchText).join('\n'), version, videoId);
 }
 
 /** セトリを確認する歌枠。まだ確認していないもの、または次に確認する日時を過ぎたものを、新しい順に */
@@ -482,7 +541,9 @@ export function saveSetlistStmt(db: D1Database, r: SetlistResult) {
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT (video_id) DO UPDATE SET
          comment_id = excluded.comment_id, author = excluded.author, text = excluded.text,
-         checked_at = excluded.checked_at, next_check_at = excluded.next_check_at`,
+         checked_at = excluded.checked_at, next_check_at = excluded.next_check_at,
+         -- 読み取った曲は、同じ実行の中で読み取り直す(parseSetlistSongs)
+         songs = NULL, search_songs = NULL, songs_version = NULL`,
     )
     .bind(r.videoId, r.comment?.id ?? null, r.comment?.author ?? null, r.comment?.text ?? null, r.checkedAt, r.nextCheckAt);
 }

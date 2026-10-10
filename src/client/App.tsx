@@ -2,7 +2,7 @@ import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@t
 import { addMonths, format, startOfDay, startOfMonth } from 'date-fns';
 import { type PanInfo, motion, useDragControls } from 'motion/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { VIDEO_TYPES, type VideoType } from '../shared/types';
+import { EVENT_FILTERS, type EventFilter, VIDEO_TYPES, filterOf, isFilterOn } from '../shared/types';
 import { ChannelDialog, type ChannelDialogState } from './components/ChannelDialog';
 import { EventDialog, type DialogState } from './components/EventDialog';
 import { Header } from './components/Header';
@@ -71,7 +71,8 @@ export default function App() {
   const month = useMemo(() => startOfMonth(date), [date]);
   const period = useMemo(() => periodRange(view, date), [view, date]);
   const days = useMemo(() => (view === 'week' ? weekDays(date) : [startOfDay(date)]), [view, date]);
-  const [types, setTypes] = useState<ReadonlySet<VideoType>>(() => new Set(VIDEO_TYPES));
+  // 表示する種別と Twitch。Twitch の配信は種別では「ライブ」なので、ライブを非表示にすると Twitch も表示されない
+  const [types, setTypes] = useState<ReadonlySet<EventFilter>>(() => new Set(EVENT_FILTERS));
   const [hiddenChannels, setHiddenChannels] = useState<ReadonlySet<string>>(() => new Set());
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [channelDialog, setChannelDialog] = useState<ChannelDialogState | null>(null);
@@ -85,12 +86,14 @@ export default function App() {
   const searching = searchOpen && searchTerm !== '';
   // 種別・チャンネルの絞り込みはサーバー側で行い、絞り込んだ結果を全件たどれるようにする
   const searchTypes = useMemo(() => VIDEO_TYPES.filter((t) => types.has(t)), [types]);
+  // ライブを非表示にしているあいだは Twitch の切り替えは結果に関係しないので、取り直さないよう true にそろえる
+  const searchTwitch = !types.has('live') || types.has('twitch');
   const searchChannels = useMemo(
     () => (hiddenChannels.size > 0 ? channels.filter((c) => !hiddenChannels.has(c.id)).map((c) => c.id) : []),
     [channels, hiddenChannels],
   );
   const searchResult = useInfiniteQuery({
-    ...searchQuery(searchTerm, searchTypes, searchChannels),
+    ...searchQuery(searchTerm, searchTypes, searchChannels, searchTwitch),
     enabled: searching && searchTypes.length > 0,
     placeholderData: keepPreviousData,
   });
@@ -134,14 +137,14 @@ export default function App() {
     [allEvents, hiddenChannels],
   );
   const counts = useMemo(() => {
-    const result: Record<VideoType, number> = { live: 0, video: 0, short: 0 };
+    const result: Record<EventFilter, number> = { live: 0, video: 0, short: 0, twitch: 0 };
     for (const e of channelVisible) {
       const at = new Date(e.eventAt);
-      if (at >= period.start && at < period.end) result[e.type]++;
+      if (at >= period.start && at < period.end) result[filterOf(e)]++;
     }
     return result;
   }, [channelVisible, period]);
-  const visible = useMemo(() => channelVisible.filter((e) => types.has(e.type)), [channelVisible, types]);
+  const visible = useMemo(() => channelVisible.filter((e) => isFilterOn(types, filterOf(e))), [channelVisible, types]);
   const byDay = useMemo(() => groupByDay(visible), [visible]);
   const searchEvents = useMemo(
     () => (searchTypes.length > 0 ? (searchResult.data?.pages.flatMap((p) => p.events) ?? []) : []),
@@ -213,6 +216,7 @@ export default function App() {
             onLoadMore={() => void searchResult.fetchNextPage()}
             types={types}
             onToggleType={(t) => setTypes((s) => toggle(s, t))}
+            showTwitch={channels.some((c) => c.twitchLogin)}
             channelMap={channelMap}
             showChannelColor={showChannelColor}
             onSelectEvent={(event) => setDialog({ kind: 'event', event })}
