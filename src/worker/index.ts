@@ -78,23 +78,36 @@ const rateLimit = (pick: (env: Bindings) => RateLimit | undefined): MiddlewareHa
   };
 
 /**
- * 応答を Cloudflare のキャッシュに置く(期間は応答の Cache-Control)。同じ内容の問い合わせは、Worker の中でも
+ * 応答を Cloudflare のキャッシュに seconds 秒だけ置く。同じ内容の問い合わせは、Worker の中でも
  * データベースを読まずに返す。キーは問い合わせの内容をそろえたものだけで作り、URL の書き方やヘッダーは見ない
  * (順番を変える・ヘッダーを足すなど、内容が同じまま書き方だけを変えても、キャッシュを避けられない)。
  * 内容そのものを変えればキーは変わるので、キャッシュに無い問い合わせの回数はレート制限で抑える。
  *
  * 使うのは検索だけ。検索はデータベースを全件読むので、同じ検索の繰り返しを安く防げる。検索結果が少し古くても、
- * 同期の結果が画面に出る速さには響きにくい。予定やセトリなどは、反映が遅れないよう、ここには置かない
+ * 同期の結果が画面に出る速さには響きにくい。予定やセトリなどは、反映が遅れないよう、ここには置かない。
+ *
+ * 応答の Cache-Control は、ルートではなくここで付ける(キャッシュに置く期間と、ブラウザが持つ期間を同じにする)。
+ * キャッシュから返すときにも付け直す。独自ドメイン(mnkm.page)では、キャッシュから出てきた応答の Cache-Control が
+ * 4 時間(ゾーンの設定のブラウザ キャッシュ TTL の既定値と思われる)に変わっていて、そのまま返すと、ブラウザが検索結果を
+ * 4 時間使い回してしまう。Age は残すので、ブラウザが持つのは、キャッシュに置いてから数えて seconds 秒まで
  */
-const cached = (key: (c: Context<{ Bindings: Bindings }>) => string): MiddlewareHandler<{ Bindings: Bindings }> =>
+const cached = (seconds: number, key: (c: Context<{ Bindings: Bindings }>) => string): MiddlewareHandler<{ Bindings: Bindings }> =>
   async (c, next) => {
+    const cacheControl = `public, max-age=${seconds}`;
     const cache = await caches.open('api');
     // パスは、書かれたままではなくルートの形(/api/setlist/:id など)を使う(「:」を「%3A」と書いても同じキーになる)
     const cacheKey = `${new URL(c.req.url).origin}${routePath(c)}?key=${encodeURIComponent(key(c))}`;
     const hit = await cache.match(cacheKey);
-    if (hit) return hit;
+    if (hit) {
+      // キャッシュから出てきた応答のヘッダーは書き換えられないので、作り直す
+      const res = new Response(hit.body, hit);
+      res.headers.set('Cache-Control', cacheControl);
+      return res;
+    }
     await next();
-    if (c.res.status === 200) c.executionCtx.waitUntil(cache.put(cacheKey, c.res.clone()));
+    if (c.res.status !== 200) return;
+    c.res.headers.set('Cache-Control', cacheControl);
+    c.executionCtx.waitUntil(cache.put(cacheKey, c.res.clone()));
   };
 
 /** パスの ID の形(YouTube の動画・チャンネル・再生リストの ID と、Twitch の配信の「twitch:数字」) */
@@ -170,14 +183,13 @@ function parseSearchQuery(c: Context): SearchQuery | null {
  */
 app.get(
   '/search',
-  cached((c) => JSON.stringify(parseSearchQuery(c))),
+  cached(60, (c) => JSON.stringify(parseSearchQuery(c))),
   rateLimit((env) => env.SEARCH_LIMITER),
   async (c) => {
     const query = parseSearchQuery(c);
     if (!query) return c.json({ error: 'q is required' }, 400);
-    const result = await searchEvents(c.env.DB, query);
-    c.header('Cache-Control', 'public, max-age=60');
-    return c.json(result);
+    // Cache-Control は cached が付ける
+    return c.json(await searchEvents(c.env.DB, query));
   },
 );
 
