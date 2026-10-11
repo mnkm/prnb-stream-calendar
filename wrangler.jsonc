@@ -21,6 +21,17 @@
     }
   ],
 
+  // 公開 API のレート制限(1 つの IP から 1 分間に受け付ける回数。src/worker/index.ts)。
+  // 検索はデータベースを全件読むので、キャッシュに無い検索はさらに少なく抑える。
+  // これは 1 つの IP からの連続した問い合わせを遅らせるもので、使った分の料金(Workers のリクエスト数、D1 の読み取り行数)に
+  // 上限を掛けるものではない(429 を返すリクエストも Workers のリクエスト数に数えられる)。
+  // Worker に届く前に落とすのは、Cloudflare のダッシュボードで設定した WAF のレート制限ルール(/api/ で始まるパス、10 秒に 20 回)。
+  // namespace_id はアカウントの中で重ならない任意の数。数える単位は Cloudflare の拠点ごとなので、厳密な上限でもない
+  "ratelimits": [
+    { "name": "API_LIMITER", "namespace_id": "1001", "simple": { "limit": 200, "period": 60 } },
+    { "name": "SEARCH_LIMITER", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } }
+  ],
+
   // 5 分ごとに YouTube と同期。1 回に差分同期するのは 2 チャンネルまで(Workers 無料プランのサブリクエスト上限のため)
   "triggers": { "crons": ["*/5 * * * *"] },
 

@@ -55,7 +55,7 @@ export function Header({ channels, view, onViewChange, search, onOpenChannelList
         <div className="flex-1 sm:hidden" />
         <button
           onClick={search.open ? search.onClose : search.onOpen}
-          aria-label={search.open ? '検索を閉じる' : 'キーワードで検索'}
+          aria-label={search.open ? '検索を閉じる' : '配信タイトルや曲名・アーティスト名で検索'}
           aria-expanded={search.open}
           className={clsx(
             'grid size-8 sm:size-9 shrink-0 place-items-center rounded-full border border-line transition',
@@ -112,8 +112,8 @@ function SearchBar({ value, onChange, onClose }: SearchProps) {
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => e.key === 'Escape' && onClose()}
-          placeholder="キーワードで検索(スペースで区切ると絞り込み)"
-          aria-label="キーワードで検索"
+          placeholder="配信タイトルや曲名・アーティスト名で検索(スペースで絞り込み)"
+          aria-label="配信タイトルや曲名・アーティスト名で検索"
           className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted [&::-webkit-search-cancel-button]:hidden"
         />
         {value && (
