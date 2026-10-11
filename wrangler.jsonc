@@ -4,6 +4,11 @@
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
+  // workers.dev の URL(prnb-youtube-calendar.<アカウント>.workers.dev)を閉じる。入口は、プロキシの Worker からの
+  // サービスバインディング(https://mnkm.page/prnb-stream-calendar/)だけにする。workers.dev の URL には WAF のルールが
+  // 掛からないため。preview_urls を書いていないので、本番のバージョンごとの URL(<バージョン>-prnb-youtube-calendar.…)も
+  // 一緒に閉じる(preview_urls の既定は workers_dev と同じ値)。ブランチのプレビュー(下の previews)は別の仕組み
+  "workers_dev": false,
   // ログ。コードが console で出すもの(同期の結果、エラー)は記録する。リクエスト 1 件ごとに自動で記録されるログ
   // (invocation logs)は止める。公開 API を連打されたときに、ログの量(Workers Paid では月 2,000 万件まで込みで、
   // 超えた分は課金)まで増えないようにするため
