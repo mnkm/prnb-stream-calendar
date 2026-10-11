@@ -543,4 +543,4 @@ npx wrangler d1 execute prnb-youtube-calendar --remote \
 
 ## クレジット
 
-- Icon: [MingCute Icons](https://github.com/mingcute-design/mingcute-icons)（Apache License 2.0）。対象のファイルとライセンス全文は `THIRD_PARTY_NOTICES.md` にあります。
+- Icon: [MingCute Icons](https://github.com/mingcute-design/mingcute-icons)（Apache License 2.0）、[Lucide](https://github.com/lucide-icons/lucide)（ISC License。Feather 由来の一部は MIT License）。対象とライセンス全文は `THIRD_PARTY_NOTICES.md` にあります。
