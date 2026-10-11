@@ -9,9 +9,12 @@
   // 超えた分は課金)まで増えないようにするため
   "observability": { "enabled": true, "logs": { "invocation_logs": false } },
 
-  // React SPA の配信。/api/* だけ Worker(Hono)で処理する
+  // React SPA の配信。/api/* だけ Worker(Hono)で処理する。
+  // 存在しないパスには 404(public/404.html)を返す。画面はパスを持たない(状態はクエリだけ)ので、どのパスにも
+  // index.html を返す設定(single-page-application)は要らない。そのうえ、画面のファイルと API は相対指定
+  // (vite.config.ts の base)なので、「/foo/bar」に index.html を返すと「/foo/assets/…」を読みに行って真っ白になる
   "assets": {
-    "not_found_handling": "single-page-application",
+    "not_found_handling": "404-page",
     "run_worker_first": ["/api/*"]
   },
 
@@ -28,7 +31,8 @@
   // 検索はデータベースを全件読むので、キャッシュに無い検索はさらに少なく抑える。
   // これは 1 つの IP からの連続した問い合わせを遅らせるもので、使った分の料金(Workers のリクエスト数、D1 の読み取り行数)に
   // 上限を掛けるものではない(429 を返すリクエストも Workers のリクエスト数に数えられる)。
-  // Worker に届く前に落とすのは、Cloudflare のダッシュボードで設定した WAF のレート制限ルール(/api/ で始まるパス、10 秒に 20 回)。
+  // Worker に届く前に落とすのは、Cloudflare のダッシュボードで設定した WAF のレート制限ルール
+  // (ブラウザから見たパスが /prnb-stream-calendar/api/ で始まるもの、10 秒に 20 回。workers.dev の URL には掛からない)。
   // namespace_id はアカウントの中で重ならない任意の数。数える単位は Cloudflare の拠点ごとなので、厳密な上限でもない
   "ratelimits": [
     { "name": "API_LIMITER", "namespace_id": "1001", "simple": { "limit": 200, "period": 60 } },

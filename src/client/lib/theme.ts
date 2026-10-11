@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 
 export type Theme = 'light' | 'dark';
 
-// public/theme.js(index.html が読み込む)でも同じキーを読み、描画前にテーマを当てている
-const STORAGE_KEY = 'theme';
+// public/theme.js(index.html が読み込む)でも同じキーを読み、描画前にテーマを当てている。
+// キーにサイトの名前を付けているのは、同じドメイン(mnkm.page)で配信されるほかのサイトと localStorage を共有するため
+// (ただの「theme」だと、ほかのサイトでの切り替えがこのサイトにも及ぶ)
+const STORAGE_KEY = 'prnb-stream-calendar-theme';
 const DARK_QUERY = '(prefers-color-scheme: dark)';
 
 /** ボタンで選んだテーマ。まだ選んでいなければ null(OS の設定に合わせる) */

@@ -13,6 +13,11 @@ import {
   type VideoType,
 } from '../../shared/types';
 
+/*
+ * API のパスは、先頭に「/」を付けず、ページからの相対指定にする(「api/…」)。
+ * このサイトはサブパス(https://mnkm.page/prnb-stream-calendar/)で配信されるので、「/api/…」だと
+ * サイトのルートを指してしまう。理由は vite.config.ts の base を参照
+ */
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path);
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
@@ -21,7 +26,7 @@ async function getJson<T>(path: string): Promise<T> {
 
 export const channelsQuery = queryOptions({
   queryKey: ['channels'],
-  queryFn: () => getJson<Channel[]>('/api/channels'),
+  queryFn: () => getJson<Channel[]>('api/channels'),
   staleTime: 60_000,
 });
 
@@ -30,7 +35,7 @@ export const eventsQuery = (from: Date, to: Date) =>
     queryKey: ['events', from.toISOString(), to.toISOString()],
     queryFn: () =>
       getJson<CalendarEvent[]>(
-        `/api/events?${new URLSearchParams({ from: from.toISOString(), to: to.toISOString() })}`,
+        `api/events?${new URLSearchParams({ from: from.toISOString(), to: to.toISOString() })}`,
       ),
     staleTime: 30_000,
   });
@@ -46,7 +51,7 @@ export const searchQuery = (q: string, types: VideoType[], channelIds: string[],
       if (!includeTwitch) params.set('twitch', '0');
       if (channelIds.length > 0) params.set('channels', channelIds.join(','));
       if (pageParam) params.set('cursor', pageParam);
-      return getJson<SearchPage>(`/api/search?${params}`);
+      return getJson<SearchPage>(`api/search?${params}`);
     },
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.nextCursor,
@@ -58,9 +63,9 @@ export const setlistQuery = (videoId: string) =>
   queryOptions({
     queryKey: ['setlist', videoId],
     queryFn: async () => {
-      const res = await fetch(`/api/setlist/${encodeURIComponent(videoId)}`);
+      const res = await fetch(`api/setlist/${encodeURIComponent(videoId)}`);
       if (res.status === 404) return null;
-      if (!res.ok) throw new Error(`/api/setlist → ${res.status}`);
+      if (!res.ok) throw new Error(`api/setlist → ${res.status}`);
       return (await res.json()) as Setlist;
     },
     staleTime: 60_000,
@@ -74,7 +79,7 @@ const enc = encodeURIComponent;
 export const channelPlaylistsQuery = (channelId: string) =>
   queryOptions({
     queryKey: ['channel-playlists', channelId],
-    queryFn: () => getJson<Playlist[]>(`/api/channels/${enc(channelId)}/playlists`),
+    queryFn: () => getJson<Playlist[]>(`api/channels/${enc(channelId)}/playlists`),
     staleTime: 60_000,
   });
 
@@ -82,7 +87,7 @@ export const channelPlaylistsQuery = (channelId: string) =>
 export const playlistQuery = (playlistId: string) =>
   queryOptions({
     queryKey: ['playlist', playlistId],
-    queryFn: () => getJson<PlaylistDetail>(`/api/playlists/${enc(playlistId)}`),
+    queryFn: () => getJson<PlaylistDetail>(`api/playlists/${enc(playlistId)}`),
     staleTime: 60_000,
   });
 
@@ -90,7 +95,7 @@ export const playlistQuery = (playlistId: string) =>
 export const eventClipsQuery = (eventId: string) =>
   queryOptions({
     queryKey: ['event-clips', eventId],
-    queryFn: () => getJson<Clip[]>(`/api/videos/${enc(eventId)}/clips`),
+    queryFn: () => getJson<Clip[]>(`api/videos/${enc(eventId)}/clips`),
     staleTime: 60_000,
   });
 
@@ -99,7 +104,7 @@ export const channelClipsQuery = (channelId: string, sort: ClipSort) =>
   infiniteQueryOptions({
     queryKey: ['channel-clips', channelId, sort],
     queryFn: ({ pageParam }) =>
-      getJson<ClipPage>(`/api/channels/${enc(channelId)}/clips?${new URLSearchParams({ sort, offset: String(pageParam) })}`),
+      getJson<ClipPage>(`api/channels/${enc(channelId)}/clips?${new URLSearchParams({ sort, offset: String(pageParam) })}`),
     initialPageParam: 0,
     getNextPageParam: (last) => last.nextOffset,
     staleTime: 60_000,
@@ -109,6 +114,6 @@ export const channelClipsQuery = (channelId: string, sort: ClipSort) =>
 export const videoPlaylistsQuery = (videoId: string) =>
   queryOptions({
     queryKey: ['video-playlists', videoId],
-    queryFn: () => getJson<Playlist[]>(`/api/videos/${enc(videoId)}/playlists`),
+    queryFn: () => getJson<Playlist[]>(`api/videos/${enc(videoId)}/playlists`),
     staleTime: 60_000,
   });
