@@ -95,10 +95,10 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 
 このサイトは、別の Worker(プロキシ)からサービスバインディングで呼ばれ、`https://mnkm.page/prnb-stream-calendar/` というサブパスで配信される想定です。プロキシは、先頭の `/prnb-stream-calendar` を外してからこの Worker に渡すので、この Worker から見たパスは、これまでどおり `/`、`/api/…`、`/assets/…` です(上の表のパスも、この Worker から見たものです。ブラウザからは、先頭に `/prnb-stream-calendar` が付きます)。
 
-- 画面が読み込むファイル(スクリプト・CSS・`theme.js`・favicon)と、画面からの API の呼び出しは、**ページからの相対指定** にしています(`vite.config.ts` の `base: './'` と、`src/client/lib/api.ts` の `api/…`)。同じビルドが、サブパスでも、ルート(ローカルの開発サーバー、プレビュー、workers.dev)でも動きます。
+- 画面が読み込むファイル(スクリプト・CSS・`theme.js`・favicon)と、画面からの API の呼び出しは、**ページからの相対指定** にしています(`vite.config.ts` の `base: './'` と、`src/client/lib/api.ts` の `api/…`)。同じビルドが、サブパスでも、ルート(ローカルの開発サーバー、プレビュー)でも動きます。
 - 画面の URL はパスを持たず、状態はクエリ(`?q=` など)だけです。存在しないパスには 404(`public/404.html`)を返します(`wrangler.jsonc` の `not_found_handling`)。どのパスにも画面を返す設定にすると、深いパスで開いたときに相対指定の基準がずれて、画面が真っ白になります。**画面にパスを持つページを足すとき、または API を `/api/…` のようにルートから指定するときは、サブパスで動かなくなる** ので注意してください。
 - プロキシは、元のリクエストのヘッダーを引き継いで渡す必要があります(公開 API のレート制限が、`CF-Connecting-IP` でアクセス元を見分けるため)。また、この Worker が返すリダイレクト(`/index.html` → `/` など)の `Location` は、この Worker から見たパスなので、プロキシで先頭に `/prnb-stream-calendar` を足します。
-- workers.dev の URL(`https://prnb-youtube-calendar.<アカウント>.workers.dev`)を開けたままにしているあいだは、そちらからも同じ内容が見えます。WAF のルールは mnkm.page に掛かるもので、workers.dev の URL には掛かりません(Worker の中のレート制限は、どちらにも掛かります)。
+- workers.dev の URL(`https://prnb-youtube-calendar.<アカウント>.workers.dev`)は閉じています(`wrangler.jsonc` の `workers_dev: false`)。WAF のルールは mnkm.page に掛かるもので、workers.dev の URL には掛からないためです。本番の入口は `https://mnkm.page/prnb-stream-calendar/` だけで、手動同期も `https://mnkm.page/prnb-stream-calendar/api/admin/sync` に送ります。
 - WAF のレート制限ルール(Cloudflare のダッシュボード)の対象は、ブラウザから見たパス(`/prnb-stream-calendar/api/` で始まる)にします。
 
 ## データモデル(D1)
