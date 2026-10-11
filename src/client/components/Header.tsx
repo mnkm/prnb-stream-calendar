@@ -2,7 +2,6 @@ import clsx from 'clsx';
 import { Calendar1, CalendarDays, CalendarRange, List, Moon, Search, Sun, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useLayoutEffect, useRef, useState } from 'react';
-import type { Channel } from '../../shared/types';
 import type { ViewMode } from '../lib/calendar';
 import { type Theme, useTheme } from '../lib/theme';
 
@@ -28,7 +27,6 @@ interface SearchProps {
 }
 
 interface Props {
-  channels: Channel[];
   view: ViewMode;
   onViewChange: (view: ViewMode) => void;
   search: SearchProps;
@@ -36,14 +34,11 @@ interface Props {
   onOpenChannelList: () => void;
 }
 
-export function Header({ channels, view, onViewChange, search, onOpenChannelList }: Props) {
-  // 左端には、並び順が先頭のチャンネル(01 PROJECT NEBULA 公式)のアイコンを、サイトの顔として表示するだけにする
-  const first = channels[0];
-
+export function Header({ view, onViewChange, search, onOpenChannelList }: Props) {
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-canvas/70 backdrop-blur-xl">
       <div className="mx-auto flex max-w-7xl items-center gap-1.5 px-4 py-3 sm:gap-3 sm:px-6">
-        {first && <SiteIcon channel={first} />}
+        <SiteIcon />
         <div className="hidden min-w-0 flex-1 sm:block">
           {['PROJECT NEBULA', 'Stream Calendar'].map((line) => (
             <p key={line} className="truncate text-[11px] font-medium tracking-[0.18em] text-muted uppercase">
@@ -213,17 +208,10 @@ export function YouTubeIcon({ className }: { className?: string }) {
   );
 }
 
-/** 左端のアイコン(表示だけ)。画像を読み込めなかったときは、チャンネルの色の丸にする */
-function SiteIcon({ channel }: { channel: Channel }) {
-  const [failed, setFailed] = useState(false);
-  return channel.iconUrl && !failed ? (
-    <img
-      src={channel.iconUrl}
-      alt={channel.title}
-      onError={() => setFailed(true)}
-      className="size-8 shrink-0 rounded-full object-cover sm:size-9"
-    />
-  ) : (
-    <div className="size-8 shrink-0 rounded-full sm:size-9" style={{ background: channel.color }} aria-hidden />
-  );
+/**
+ * 左端のアイコン(表示だけ)。favicon と同じ画像(public/favicon.svg)を使う。
+ * サブパスで配信されても読めるよう、ページからの相対指定にする(vite.config.ts の base)
+ */
+function SiteIcon() {
+  return <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" className="size-8 shrink-0 sm:size-9" />;
 }
