@@ -1,0 +1,19 @@
+# 依存パッケージの定期更新。脆弱性への修正 PR(security updates)はこの設定と別に、随時作られる
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    # 公開から日の浅い版は見送る
+    cooldown:
+      default-days: 7
+    # minor と patch は 1 本の PR にまとめる。major は破壊的変更がありうるので 1 つずつ
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
