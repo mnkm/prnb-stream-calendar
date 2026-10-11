@@ -16,7 +16,7 @@ import {
   searchEvents,
   toChannel,
 } from './db';
-import { syncAll } from './sync';
+import { FULL_SYNC_INTERVAL_MS, syncAll, syncLiveStatus } from './sync';
 import { toIsoSeconds } from './time';
 
 type Bindings = Env & {
@@ -267,7 +267,13 @@ const parseTypes = (value: string | undefined) => unique(parseList(value).filter
 
 export default {
   fetch: app.fetch,
-  async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(syncAll(env).then((results) => console.log(JSON.stringify(results))));
+  /**
+   * Cron は毎分。5 分に 1 回(FULL_SYNC_INTERVAL_MS)は全体の同期、それ以外の回は、配信の開始・終了だけを見る軽い確認。
+   * 終わるまで待つ(waitUntil に渡すだけだと、戻ったあとの時間に上限がかかり、長い同期が途中で打ち切られうる)
+   */
+  async scheduled(controller, env) {
+    const minute = Math.floor(controller.scheduledTime / 60_000);
+    const full = minute % (FULL_SYNC_INTERVAL_MS / 60_000) === 0;
+    console.log(JSON.stringify(full ? await syncAll(env) : await syncLiveStatus(env)));
   },
 } satisfies ExportedHandler<Bindings>;
