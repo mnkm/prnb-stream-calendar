@@ -3,6 +3,8 @@
 YouTube チャンネルの **動画・ショート・ライブ配信** と、Twitch の **配信・クリップ** をカレンダーで表示する Web アプリ。
 Cloudflare Workers(静的アセット + Hono API)+ D1 + Cron Triggers で動作します。
 
+> **ファンメイドの非公式ツールです。** PROJECT NEBULA および所属タレントの公式のものではなく、運営・タレントとは関係のない個人が作成・運用しています。
+
 ```
 React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
                                         ▲ upsert
@@ -32,7 +34,8 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 | Twitch | Twitch にもチャンネルがあるメンバーは、Twitch の配信中のライブと過去の配信(アーカイブ)もカレンダーに表示する。Twitch の配信には「Twitch」の印が付き、詳細ダイアログでは Twitch のプレーヤーで再生する。チャンネル情報には Twitch へのリンクとフォロワー数を表示する |
 | Twitch のクリップ | Twitch の配信の詳細ダイアログに「この配信のクリップ」を再生数の多い順に表示し、押すとダイアログ内で再生する。チャンネル情報の「クリップ」タブでは、カレンダーに無い配信のクリップも含めて、人気順・新しい順で見られる |
 | 再生できなくなったもの | 取り込んだあとに非公開・削除された YouTube の動画や、公開が終わった Twitch のアーカイブは、記録を残したまま「再生不可」の印を付けて薄く表示し、詳細ダイアログには「この動画は再生できません」と確認した日付を表示する。YouTube で限定公開になったものには「限定公開」の印を付ける。削除された Twitch のクリップは一覧から外す |
-| 複数チャンネル | 2 チャンネル目を登録すると、チャンネルフィルターと色分けが自動で表示される。ヘッダー左端には並び順が先頭のチャンネル(01)のアイコンを表示する(押しても動作しない) |
+| 複数チャンネル | 2 チャンネル目を登録すると、チャンネルフィルターと色分けが自動で表示される。ヘッダー左端にはサイトのアイコン(favicon と同じもの)を表示する(押しても動作しない) |
+| 非公式の注記 | ページのいちばん下に、ファンメイドの非公式サイトであることと、情報の取得元(YouTube / Twitch)を表示する。同じ内容を `index.html` の `description` にも入れている |
 
 表示の状態は URL に残るので、そのまま共有できます。
 
@@ -85,8 +88,6 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 公開 API には、次の制限があります(`src/worker/index.ts`、回数は `wrangler.jsonc` の `ratelimits`)。
 
 - **レート制限**: 1 つの IP(IPv6 は /64)から、API 全体で 1 分間に 200 回、キャッシュに無い検索は 1 分間に 30 回まで。超えると `429`(`Retry-After: 60`)を返します。数えるのは Cloudflare の拠点ごとなので、厳密な上限ではありません。
-- **WAF のレート制限ルール**(Cloudflare のダッシュボードで設定。コードには含まれません): ブラウザから見た URI パスが `/prnb-stream-calendar/api/` で始まるリクエストを、1 つの IP から 10 秒間に 20 回まで。超えた分は Worker に届く前に落とすので、Workers のリクエスト数にも数えられません。
-- **料金について**: Workers Paid プランでは、上限に達して止まることはなく、使った分が請求されます(Workers のリクエスト数と CPU 時間、D1 の読み取り・書き込みの行数)。上のレート制限は、連続した問い合わせを遅らせるもので、**料金に上限を掛けるものではありません**。Cloudflare の請求の通知(下の「運用」)を設定しておいてください。
 - **入力の上限**: `/api/events` の期間は 15 分単位に広げて扱います。パスの ID は英数字と `_` `-` `:` の 64 文字までで、それ以外は `404` です。`cursor` は `nextCursor` の形のものだけを受け付けます。
 
 画面(静的ファイル)の応答には、`public/_headers` で CSP などのヘッダーを付けています。開発サーバー(`npm run dev`)では付かないので、読み込み先(外部の画像・フォント・埋め込み)を足したときは、`npm run preview` で確かめてください。
@@ -98,8 +99,7 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 - 画面が読み込むファイル(スクリプト・CSS・`theme.js`・favicon)と、画面からの API の呼び出しは、**ページからの相対指定** にしています(`vite.config.ts` の `base: './'` と、`src/client/lib/api.ts` の `api/…`)。同じビルドが、サブパスでも、ルート(ローカルの開発サーバー、プレビュー)でも動きます。
 - 画面の URL はパスを持たず、状態はクエリ(`?q=` など)だけです。存在しないパスには 404(`public/404.html`)を返します(`wrangler.jsonc` の `not_found_handling`)。どのパスにも画面を返す設定にすると、深いパスで開いたときに相対指定の基準がずれて、画面が真っ白になります。**画面にパスを持つページを足すとき、または API を `/api/…` のようにルートから指定するときは、サブパスで動かなくなる** ので注意してください。
 - プロキシは、元のリクエストのヘッダーを引き継いで渡す必要があります(公開 API のレート制限が、`CF-Connecting-IP` でアクセス元を見分けるため)。また、この Worker が返すリダイレクト(`/index.html` → `/` など)の `Location` は、この Worker から見たパスなので、プロキシで先頭に `/prnb-stream-calendar` を足します。
-- workers.dev の URL(`https://prnb-youtube-calendar.<アカウント>.workers.dev`)は閉じています(`wrangler.jsonc` の `workers_dev: false`)。WAF のルールは mnkm.page に掛かるもので、workers.dev の URL には掛からないためです。本番の入口は `https://mnkm.page/prnb-stream-calendar/` だけで、手動同期も `https://mnkm.page/prnb-stream-calendar/api/admin/sync` に送ります。
-- WAF のレート制限ルール(Cloudflare のダッシュボード)の対象は、ブラウザから見たパス(`/prnb-stream-calendar/api/` で始まる)にします。
+- workers.dev の URL(`https://prnb-youtube-calendar.<アカウント>.workers.dev`)は閉じています(`wrangler.jsonc` の `workers_dev: false`)。本番の入口は `https://mnkm.page/prnb-stream-calendar/` だけです。
 
 ## データモデル(D1)
 
@@ -475,15 +475,6 @@ npx wrangler triggers deploy  # Cron の設定だけを本番に反映する
 
 - 実行すると `schedule: * * * * *` のように、反映された設定が表示されます。ダッシュボードの Workers & Pages → `prnb-youtube-calendar` → Settings → Trigger events でも確認できます。
 - 設定を変えてから実際の実行間隔が切り替わるまで、20 分ほどかかることがあります。切り替わるまでは前の間隔のまま実行されます(ダッシュボードの「Cron イベント」の `Cron` 列で、どちらの設定で実行されたかがわかります)。
-
-### 請求の通知を設定する
-
-Workers Paid プランでは、使った分が請求されます。ふだんの利用は込みの範囲(Workers のリクエスト 月 1,000 万回、CPU 月 3,000 万ミリ秒、D1 の読み取り 月 250 億行)に大きく収まりますが、公開 API を連打された場合などに増えることがあります。通知は知らせるだけで、止めはしません。
-
-1. Cloudflare のダッシュボードで、Manage Account → Billing → Billable usage(または Notifications)を開く。
-2. 「Usage Based Billing」の通知を追加し、対象の製品(Workers、D1)と、知らせてほしい金額のしきい値、通知先のメールアドレスを設定する。
-
-画面の構成は変わることがあるので、見つからないときは Cloudflare のドキュメントで「billing notifications」を調べてください。
 
 ### 同期の状態を確かめるとき
 

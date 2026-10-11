@@ -5,13 +5,12 @@
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
   // workers.dev の URL(prnb-youtube-calendar.<アカウント>.workers.dev)を閉じる。入口は、プロキシの Worker からの
-  // サービスバインディング(https://mnkm.page/prnb-stream-calendar/)だけにする。workers.dev の URL には WAF のルールが
-  // 掛からないため。preview_urls を書いていないので、本番のバージョンごとの URL(<バージョン>-prnb-youtube-calendar.…)も
+  // サービスバインディング(https://mnkm.page/prnb-stream-calendar/)だけにする。
+  // preview_urls を書いていないので、本番のバージョンごとの URL(<バージョン>-prnb-youtube-calendar.…)も
   // 一緒に閉じる(preview_urls の既定は workers_dev と同じ値)。ブランチのプレビュー(下の previews)は別の仕組み
   "workers_dev": false,
   // ログ。コードが console で出すもの(同期の結果、エラー)は記録する。リクエスト 1 件ごとに自動で記録されるログ
-  // (invocation logs)は止める。公開 API を連打されたときに、ログの量(Workers Paid では月 2,000 万件まで込みで、
-  // 超えた分は課金)まで増えないようにするため
+  // (invocation logs)は止める(ログの量を抑えるため)
   "observability": { "enabled": true, "logs": { "invocation_logs": false } },
 
   // React SPA の配信。/api/* だけ Worker(Hono)で処理する。
@@ -34,10 +33,6 @@
 
   // 公開 API のレート制限(1 つの IP から 1 分間に受け付ける回数。src/worker/index.ts)。
   // 検索はデータベースを全件読むので、キャッシュに無い検索はさらに少なく抑える。
-  // これは 1 つの IP からの連続した問い合わせを遅らせるもので、使った分の料金(Workers のリクエスト数、D1 の読み取り行数)に
-  // 上限を掛けるものではない(429 を返すリクエストも Workers のリクエスト数に数えられる)。
-  // Worker に届く前に落とすのは、Cloudflare のダッシュボードで設定した WAF のレート制限ルール
-  // (ブラウザから見たパスが /prnb-stream-calendar/api/ で始まるもの、10 秒に 20 回。workers.dev の URL には掛からない)。
   // namespace_id はアカウントの中で重ならない任意の数。数える単位は Cloudflare の拠点ごとなので、厳密な上限でもない
   "ratelimits": [
     { "name": "API_LIMITER", "namespace_id": "1001", "simple": { "limit": 200, "period": 60 } },

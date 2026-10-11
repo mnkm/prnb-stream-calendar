@@ -189,7 +189,6 @@ export default function App() {
     <div className="min-h-dvh">
       <div className="app-backdrop" aria-hidden />
       <Header
-        channels={channels}
         view={view}
         onViewChange={(v) => {
           // 表示を切り替えたら検索をやめてカレンダーに戻る
@@ -206,7 +205,7 @@ export default function App() {
         onOpenChannelList={() => setChannelDialog({ kind: 'list' })}
       />
 
-      <main className="mx-auto max-w-7xl px-4 pb-20 sm:px-6">
+      <main className="mx-auto max-w-7xl px-4 pb-10 sm:px-6">
         {searching ? (
           <SearchResults
             query={searchTerm}
@@ -307,6 +306,14 @@ export default function App() {
           </>
         )}
       </main>
+
+      {/* 公式のサイトと間違われないよう、どの表示でもページのいちばん下に出す */}
+      <footer className="mx-auto max-w-7xl px-4 pb-20 sm:px-6">
+        <div className="space-y-1 border-t border-line pt-6 text-center text-xs leading-relaxed text-muted">
+          <p>本サイトはファンメイドの非公式サイトです。PROJECT NEBULA および所属タレントとは関係ありません。</p>
+          <p>動画・配信の情報は YouTube / Twitch から取得しています。</p>
+        </div>
+      </footer>
 
       <EventDialog
         state={dialog}
