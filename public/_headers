@@ -2,13 +2,15 @@
 #
 # Content-Security-Policy は、読み込める先を必要なものだけに絞る(外部の文字列を画面に出すので、万一スクリプトとして
 # 解釈される経路ができても動かないように)。読み込み先を足したときは、ここにも足す
-#   script-src … 自分のファイルだけ(インラインのスクリプトは使えない。テーマの切り替えは /theme.js)
+#   script-src … 自分のファイルと、Cloudflare Web Analytics の計測スクリプト(インラインのスクリプトは使えない。
+#                 テーマの切り替えは /theme.js)。計測スクリプトは、独自ドメイン(mnkm.page)で Cloudflare が HTML に差し込む
+#   connect-src … 自分の API と、計測スクリプトの送り先
 #   style-src  … 自分のファイル、Google Fonts の CSS、style 属性(React の style、アニメーション)
 #   img-src    … サムネイルやアイコンは YouTube・Twitch の複数のホストから来るので、https 全体
 #   frame-src  … YouTube と Twitch の埋め込みプレーヤー
 #   frame-ancestors / X-Frame-Options … ほかのサイトの枠の中に、このサイトを表示させない
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; frame-src https://www.youtube-nocookie.com https://player.twitch.tv https://clips.twitch.tv; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; frame-src https://www.youtube-nocookie.com https://player.twitch.tv https://clips.twitch.tv; connect-src 'self' https://cloudflareinsights.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
