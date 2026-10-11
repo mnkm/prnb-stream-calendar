@@ -4,7 +4,10 @@
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
+  // ログ。コードが console で出すもの(同期の結果、エラー)は記録する。リクエスト 1 件ごとに自動で記録されるログ
+  // (invocation logs)は止める。公開 API を連打されたときに、ログの量(Workers Paid では月 2,000 万件まで込みで、
+  // 超えた分は課金)まで増えないようにするため
+  "observability": { "enabled": true, "logs": { "invocation_logs": false } },
 
   // React SPA の配信。/api/* だけ Worker(Hono)で処理する
   "assets": {
