@@ -414,15 +414,13 @@ function decodeCursor(cursor: string): { eventAt: string; id: string } | null {
  * Twitch の配信は twitch に数え、live には入れない
  */
 export async function searchEvents(db: D1Database, q: SearchQuery): Promise<SearchPage> {
-  // 入力した % と _ はワイルドカードではなく文字として扱う(エスケープ文字は !)
-  const escapeLike = (s: string) => s.replace(/[!%_]/g, (c) => `!${c}`);
   // それぞれの語が、タイトルかセトリ(曲名・アーティスト)のどこかにあれば一致とする。
-  // search_title がまだ空の行は、元のタイトルで探す
+  // LIKE ではなく instr で探す(D1 の LIKE はパターンが 50 バイトまでで、日本語 17 文字以上の語がエラーになる。
+  // % と _ をエスケープする必要もない)。search_title がまだ空の行は、元のタイトルを小文字にして探す
   const match = q.terms.map(
-    () =>
-      `(COALESCE(v.search_title, v.title) LIKE '%' || ? || '%' ESCAPE '!' OR s.search_songs LIKE '%' || ? || '%' ESCAPE '!')`,
+    () => `(instr(COALESCE(v.search_title, lower(v.title)), ?) > 0 OR instr(s.search_songs, ?) > 0)`,
   );
-  const matchParams: string[] = q.terms.flatMap((t) => [escapeLike(t), escapeLike(t)]);
+  const matchParams: string[] = q.terms.flatMap((t) => [t, t]);
   if (q.channelIds.length > 0) {
     match.push(`v.channel_id IN (${placeholders(q.channelIds.length)})`);
     matchParams.push(...q.channelIds);

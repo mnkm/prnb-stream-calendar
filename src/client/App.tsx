@@ -24,7 +24,8 @@ import {
   weekDays,
 } from './lib/calendar';
 
-const LIVE_REFRESH_MS = 5 * 60_000;
+/** 開いたままの画面で、予定を取り直す間隔 */
+const LIVE_REFRESH_MS = 60_000;
 /** スワイプで前後に移動する距離(px)と速さ(px/秒)のしきい値 */
 const SWIPE_DISTANCE_PX = 80;
 const SWIPE_MIN_DISTANCE_PX = 30;
@@ -107,6 +108,9 @@ export default function App() {
     ...eventsQuery(grid.start, grid.end),
     placeholderData: keepPreviousData,
     refetchInterval: LIVE_REFRESH_MS,
+    // タブに戻ったときにも取り直す(裏にあるあいだは、取り直しが止まるため)。
+    // 全体の既定(main.tsx)は変えない。検索は読み込み済みのページを全部取り直すことになるので、付けない
+    refetchOnWindowFocus: true,
   });
   const allEvents = useMemo(() => eventsResult.data ?? [], [eventsResult.data]);
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 export type Theme = 'light' | 'dark';
 
-// index.html のインラインスクリプトでも同じキーを読み、描画前にテーマを当てている
+// public/theme.js(index.html が読み込む)でも同じキーを読み、描画前にテーマを当てている
 const STORAGE_KEY = 'theme';
 const DARK_QUERY = '(prefers-color-scheme: dark)';
 

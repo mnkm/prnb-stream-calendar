@@ -22,7 +22,7 @@ async function getJson<T>(path: string): Promise<T> {
 export const channelsQuery = queryOptions({
   queryKey: ['channels'],
   queryFn: () => getJson<Channel[]>('/api/channels'),
-  staleTime: 5 * 60_000,
+  staleTime: 60_000,
 });
 
 export const eventsQuery = (from: Date, to: Date) =>
@@ -32,7 +32,7 @@ export const eventsQuery = (from: Date, to: Date) =>
       getJson<CalendarEvent[]>(
         `/api/events?${new URLSearchParams({ from: from.toISOString(), to: to.toISOString() })}`,
       ),
-    staleTime: 60_000,
+    staleTime: 30_000,
   });
 
 /** キーワード検索。50 件ずつ取り、続きは前のページの nextCursor で取る */
@@ -63,7 +63,9 @@ export const setlistQuery = (videoId: string) =>
       if (!res.ok) throw new Error(`/api/setlist → ${res.status}`);
       return (await res.json()) as Setlist;
     },
-    staleTime: 5 * 60_000,
+    staleTime: 60_000,
+    // 開いたままのタブに戻ったときに、あとから見つかったセトリが出るように
+    refetchOnWindowFocus: true,
   });
 
 const enc = encodeURIComponent;
@@ -73,7 +75,7 @@ export const channelPlaylistsQuery = (channelId: string) =>
   queryOptions({
     queryKey: ['channel-playlists', channelId],
     queryFn: () => getJson<Playlist[]>(`/api/channels/${enc(channelId)}/playlists`),
-    staleTime: 5 * 60_000,
+    staleTime: 60_000,
   });
 
 /** 再生リストの中身 */
@@ -81,7 +83,7 @@ export const playlistQuery = (playlistId: string) =>
   queryOptions({
     queryKey: ['playlist', playlistId],
     queryFn: () => getJson<PlaylistDetail>(`/api/playlists/${enc(playlistId)}`),
-    staleTime: 5 * 60_000,
+    staleTime: 60_000,
   });
 
 /** Twitch の配信に結び付いたクリップ(再生数の多い順) */
@@ -89,7 +91,7 @@ export const eventClipsQuery = (eventId: string) =>
   queryOptions({
     queryKey: ['event-clips', eventId],
     queryFn: () => getJson<Clip[]>(`/api/videos/${enc(eventId)}/clips`),
-    staleTime: 5 * 60_000,
+    staleTime: 60_000,
   });
 
 /** チャンネルの Twitch のクリップ。30 件ずつ取り、続きは前のページの nextOffset で取る */
@@ -100,7 +102,7 @@ export const channelClipsQuery = (channelId: string, sort: ClipSort) =>
       getJson<ClipPage>(`/api/channels/${enc(channelId)}/clips?${new URLSearchParams({ sort, offset: String(pageParam) })}`),
     initialPageParam: 0,
     getNextPageParam: (last) => last.nextOffset,
-    staleTime: 5 * 60_000,
+    staleTime: 60_000,
   });
 
 /** 動画が入っている再生リスト */
@@ -108,5 +110,5 @@ export const videoPlaylistsQuery = (videoId: string) =>
   queryOptions({
     queryKey: ['video-playlists', videoId],
     queryFn: () => getJson<Playlist[]>(`/api/videos/${enc(videoId)}/playlists`),
-    staleTime: 5 * 60_000,
+    staleTime: 60_000,
   });

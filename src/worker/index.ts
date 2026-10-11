@@ -1,7 +1,10 @@
-import { Hono } from 'hono';
+import { type Context, Hono, type MiddlewareHandler } from 'hono';
+import { routePath } from 'hono/route';
 import { splitSearchTerms } from '../shared/search';
 import { type ClipSort, VIDEO_TYPES, type VideoType } from '../shared/types';
 import {
+  type EventQuery,
+  type SearchQuery,
   getPlaylistDetail,
   getSetlist,
   listChannelClips,
@@ -25,114 +28,221 @@ type Bindings = Env & {
 };
 
 const MAX_RANGE_MS = 100 * 24 * 60 * 60 * 1000;
+const RANGE_STEP_MS = 15 * 60 * 1000;
 const MAX_CHANNEL_FILTER = 20;
+/** 絞り込みに渡せるチャンネル ID の長さの上限(YouTube のチャンネル ID は 24 文字) */
+const MAX_ID_LENGTH = 64;
 const SEARCH_PAGE_SIZE = 50;
 const MAX_SEARCH_TERMS = 5;
 const MAX_SEARCH_TERM_LENGTH = 50;
+/** 検索語に分ける前の長さの上限(MAX_SEARCH_TERMS 個の語と、あいだの空白が入る長さ) */
+const MAX_SEARCH_QUERY_LENGTH = 300;
+/** cursor の形(db.ts の encodeCursor が作る「日時~ID」)。これ以外は、最初のページとして扱う */
+const CURSOR_FORMAT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z~[\w:-]{1,64}$/;
 const EVENT_CLIPS_LIMIT = 50;
 const CLIPS_PAGE_SIZE = 30;
+/** クリップの一覧でさかのぼれる位置の上限(データベースが読む行数は offset に比例するので、際限なく大きくさせない) */
+const MAX_CLIPS_OFFSET = 3000;
 
 const app = new Hono<{ Bindings: Bindings }>().basePath('/api');
 
+/**
+ * レート制限で数える単位。IPv4 はアドレスごと、IPv6 は 1 つの回線に割り当てられる /64 ごと
+ * (アドレスごとに数えると、1 つの回線からアドレスを変えるだけで制限を抜けられる)
+ */
+function clientKey(ip: string | undefined): string {
+  if (!ip) return 'unknown';
+  if (!ip.includes(':')) return ip;
+  const [head, tail] = ip.split('::');
+  const first = head ? head.split(':') : [];
+  const last = tail ? tail.split(':') : [];
+  const groups = tail === undefined ? first : [...first, ...Array(Math.max(0, 8 - first.length - last.length)).fill('0'), ...last];
+  return groups
+    .slice(0, 4)
+    .map((g) => (Number.parseInt(g, 16) || 0).toString(16))
+    .join(':');
+}
+
+/**
+ * 1 つの IP から 1 分間に受け付ける回数を制限する(回数は wrangler.jsonc の ratelimits)。
+ * バインディングが無い環境(プレビュー)では制限しない
+ */
+const rateLimit = (pick: (env: Bindings) => RateLimit | undefined): MiddlewareHandler<{ Bindings: Bindings }> =>
+  async (c, next) => {
+    const limiter = pick(c.env);
+    if (limiter) {
+      const { success } = await limiter.limit({ key: clientKey(c.req.header('CF-Connecting-IP')) });
+      if (!success) return c.json({ error: 'too many requests' }, 429, { 'Retry-After': '60' });
+    }
+    await next();
+  };
+
+/**
+ * 応答を Cloudflare のキャッシュに置く(期間は応答の Cache-Control)。同じ内容の問い合わせは、Worker の中でも
+ * データベースを読まずに返す。キーは問い合わせの内容をそろえたものだけで作り、URL の書き方やヘッダーは見ない
+ * (順番を変える・ヘッダーを足すなど、内容が同じまま書き方だけを変えても、キャッシュを避けられない)。
+ * 内容そのものを変えればキーは変わるので、キャッシュに無い問い合わせの回数はレート制限で抑える。
+ *
+ * 使うのは検索だけ。検索はデータベースを全件読むので、同じ検索の繰り返しを安く防げる。検索結果が少し古くても、
+ * 同期の結果が画面に出る速さには響きにくい。予定やセトリなどは、反映が遅れないよう、ここには置かない
+ */
+const cached = (key: (c: Context<{ Bindings: Bindings }>) => string): MiddlewareHandler<{ Bindings: Bindings }> =>
+  async (c, next) => {
+    const cache = await caches.open('api');
+    // パスは、書かれたままではなくルートの形(/api/setlist/:id など)を使う(「:」を「%3A」と書いても同じキーになる)
+    const cacheKey = `${new URL(c.req.url).origin}${routePath(c)}?key=${encodeURIComponent(key(c))}`;
+    const hit = await cache.match(cacheKey);
+    if (hit) return hit;
+    await next();
+    if (c.res.status === 200) c.executionCtx.waitUntil(cache.put(cacheKey, c.res.clone()));
+  };
+
+/** パスの ID の形(YouTube の動画・チャンネル・再生リストの ID と、Twitch の配信の「twitch:数字」) */
+const ID_FORMAT = /^[\w:-]{1,64}$/;
+
+/** パスの ID が ID の形でなければ、データベースを見ずに 404 を返す */
+const validId: MiddlewareHandler<{ Bindings: Bindings }> = async (c, next) => {
+  if (!ID_FORMAT.test(c.req.param('id') ?? '')) return c.json({ error: 'not found' }, 404);
+  await next();
+};
+
+app.use('*', rateLimit((env) => env.API_LIMITER));
+
 app.get('/channels', async (c) => {
   const rows = await listEnabledChannels(c.env.DB);
-  c.header('Cache-Control', 'public, max-age=300');
+  c.header('Cache-Control', 'public, max-age=60');
   return c.json(rows.map(toChannel));
 });
 
-app.get('/events', async (c) => {
+/** /events の問い合わせ。正しくなければ、返すエラーの文 */
+function parseEventQuery(c: Context): EventQuery | string {
   const from = parseDate(c.req.query('from'));
   const to = parseDate(c.req.query('to'));
-  if (!from || !to || to <= from) {
-    return c.json({ error: 'from / to must be ISO 8601 dates with from < to' }, 400);
-  }
-  if (to.getTime() - from.getTime() > MAX_RANGE_MS) {
-    return c.json({ error: 'range must be 100 days or less' }, 400);
-  }
+  if (!from || !to || to <= from) return 'from / to must be ISO 8601 dates with from < to';
+  if (to.getTime() - from.getTime() > MAX_RANGE_MS) return 'range must be 100 days or less';
+  // 15 分単位に広げる(問い合わせの種類を増やしすぎないように)。画面が送るのは各地の 0 時で、
+  // どのタイムゾーンでも UTC の 15 分単位になるので、画面からの問い合わせの結果は変わらない
+  return {
+    from: toIsoSeconds(new Date(Math.floor(from.getTime() / RANGE_STEP_MS) * RANGE_STEP_MS)),
+    to: toIsoSeconds(new Date(Math.ceil(to.getTime() / RANGE_STEP_MS) * RANGE_STEP_MS)),
+    channelIds: parseIdList(c.req.query('channels')),
+    types: parseTypes(c.req.query('types')),
+  };
+}
 
-  const events = await queryEvents(c.env.DB, {
-    from: toIsoSeconds(from),
-    to: toIsoSeconds(to),
-    channelIds: parseList(c.req.query('channels')).slice(0, MAX_CHANNEL_FILTER),
-    types: parseList(c.req.query('types')).filter(isVideoType),
-  });
-  c.header('Cache-Control', 'public, max-age=60');
-  return c.json(events);
-});
+app.get(
+  '/events',
+  async (c) => {
+    const query = parseEventQuery(c);
+    if (typeof query === 'string') return c.json({ error: query }, 400);
+    const events = await queryEvents(c.env.DB, query);
+    // 開いたままの画面は 1 分ごとに取り直す(src/client/App.tsx)。その取り直しがブラウザのキャッシュで済まされないよう、短くする
+    c.header('Cache-Control', 'public, max-age=30');
+    return c.json(events);
+  },
+);
+
+/** /search の問い合わせ。検索語が無ければ null */
+function parseSearchQuery(c: Context): SearchQuery | null {
+  // 語は「すべて含む」で探すので、順番と重なりは結果に関係しない。そろえてから使う(同じ検索を同じキャッシュにまとめる)
+  const terms = unique(
+    splitSearchTerms((c.req.query('q') ?? '').slice(0, MAX_SEARCH_QUERY_LENGTH))
+      .slice(0, MAX_SEARCH_TERMS)
+      .map((t) => t.slice(0, MAX_SEARCH_TERM_LENGTH)),
+  );
+  if (terms.length === 0) return null;
+  const cursor = c.req.query('cursor');
+  return {
+    terms,
+    channelIds: parseIdList(c.req.query('channels')),
+    types: parseTypes(c.req.query('types')),
+    includeTwitch: c.req.query('twitch') !== '0',
+    cursor: cursor && CURSOR_FORMAT.test(cursor) ? cursor : null,
+    limit: SEARCH_PAGE_SIZE,
+  };
+}
 
 /**
  * キーワード検索。スペース(全角も可)で区切った語をすべて含むタイトルを、期間に関係なく新しい順に返す。
  * 全角・半角、英字の大文字・小文字は区別しない。50 件ずつ返し、続きは cursor に nextCursor を渡して取る。
- * twitch=0 を付けると、Twitch の配信を除く
+ * twitch=0 を付けると、Twitch の配信を除く。
+ * 検索はデータベースを全件読むので、キャッシュに無い検索は、ほかの API より少ない回数に制限する
  */
-app.get('/search', async (c) => {
-  const terms = splitSearchTerms(c.req.query('q') ?? '')
-    .slice(0, MAX_SEARCH_TERMS)
-    .map((t) => t.slice(0, MAX_SEARCH_TERM_LENGTH));
-  if (terms.length === 0) return c.json({ error: 'q is required' }, 400);
-
-  const result = await searchEvents(c.env.DB, {
-    terms,
-    channelIds: parseList(c.req.query('channels')).slice(0, MAX_CHANNEL_FILTER),
-    types: parseList(c.req.query('types')).filter(isVideoType),
-    includeTwitch: c.req.query('twitch') !== '0',
-    cursor: c.req.query('cursor') || null,
-    limit: SEARCH_PAGE_SIZE,
-  });
-  c.header('Cache-Control', 'public, max-age=60');
-  return c.json(result);
-});
+app.get(
+  '/search',
+  cached((c) => JSON.stringify(parseSearchQuery(c))),
+  rateLimit((env) => env.SEARCH_LIMITER),
+  async (c) => {
+    const query = parseSearchQuery(c);
+    if (!query) return c.json({ error: 'q is required' }, 400);
+    const result = await searchEvents(c.env.DB, query);
+    c.header('Cache-Control', 'public, max-age=60');
+    return c.json(result);
+  },
+);
 
 /** 歌枠のセトリ(コメントの原文と書き手)。まだ見つかっていなければ 404 */
-app.get('/setlist/:id', async (c) => {
+app.get('/setlist/:id', validId, async (c) => {
   const setlist = await getSetlist(c.env.DB, c.req.param('id'));
   if (!setlist) return c.json({ error: 'not found' }, 404);
-  c.header('Cache-Control', 'public, max-age=300');
+  c.header('Cache-Control', 'public, max-age=60');
   return c.json(setlist);
 });
 
 /** チャンネルの再生リスト(おすすめを先頭に、残りは最後に動画が追加された順) */
-app.get('/channels/:id/playlists', async (c) => {
-  c.header('Cache-Control', 'public, max-age=300');
+app.get('/channels/:id/playlists', validId, async (c) => {
+  c.header('Cache-Control', 'public, max-age=60');
   return c.json(await listChannelPlaylists(c.env.DB, c.req.param('id')));
 });
 
 /** 再生リストの中身(このカレンダーに登録済みの動画だけ、再生リストの並び順) */
-app.get('/playlists/:id', async (c) => {
+app.get('/playlists/:id', validId, async (c) => {
   const detail = await getPlaylistDetail(c.env.DB, c.req.param('id'));
   if (!detail) return c.json({ error: 'not found' }, 404);
-  c.header('Cache-Control', 'public, max-age=300');
+  c.header('Cache-Control', 'public, max-age=60');
   return c.json(detail);
 });
 
 /** 動画が入っている再生リスト */
-app.get('/videos/:id/playlists', async (c) => {
-  c.header('Cache-Control', 'public, max-age=300');
+app.get('/videos/:id/playlists', validId, async (c) => {
+  c.header('Cache-Control', 'public, max-age=60');
   return c.json(await listVideoPlaylists(c.env.DB, c.req.param('id')));
 });
 
 /** Twitch の配信に結び付いたクリップ(再生数の多い順) */
-app.get('/videos/:id/clips', async (c) => {
-  c.header('Cache-Control', 'public, max-age=300');
+app.get('/videos/:id/clips', validId, async (c) => {
+  c.header('Cache-Control', 'public, max-age=60');
   return c.json(await listEventClips(c.env.DB, c.req.param('id'), EVENT_CLIPS_LIMIT));
 });
 
 /** チャンネルの Twitch のクリップ。sort は popular(再生数の多い順)か new(新しい順)。続きは offset に nextOffset を渡して取る */
-app.get('/channels/:id/clips', async (c) => {
+app.get('/channels/:id/clips', validId, async (c) => {
   const sort: ClipSort = c.req.query('sort') === 'new' ? 'new' : 'popular';
-  const offset = Math.max(0, Math.floor(Number(c.req.query('offset'))) || 0);
-  c.header('Cache-Control', 'public, max-age=300');
-  return c.json(await listChannelClips(c.env.DB, c.req.param('id'), sort, offset, CLIPS_PAGE_SIZE));
+  const offset = Number(c.req.query('offset') ?? 0);
+  if (!Number.isInteger(offset) || offset < 0 || offset > MAX_CLIPS_OFFSET) {
+    return c.json({ error: `offset must be an integer from 0 to ${MAX_CLIPS_OFFSET}` }, 400);
+  }
+  const page = await listChannelClips(c.env.DB, c.req.param('id'), sort, offset, CLIPS_PAGE_SIZE);
+  c.header('Cache-Control', 'public, max-age=60');
+  // 上限より先は続きを出さない(画面が、受け付けない offset を問い合わせないように)
+  return c.json(page.nextOffset !== null && page.nextOffset > MAX_CLIPS_OFFSET ? { ...page, nextOffset: null } : page);
 });
 
 /** 手動同期(初回の取り込みや動作確認用)。Authorization: Bearer <ADMIN_TOKEN> */
 app.post('/admin/sync', async (c) => {
   const token = c.env.ADMIN_TOKEN;
-  if (!token || c.req.header('Authorization') !== `Bearer ${token}`) {
+  if (!token || !(await sameText(c.req.header('Authorization') ?? '', `Bearer ${token}`))) {
     return c.json({ error: 'unauthorized' }, 401);
   }
   return c.json(await syncAll(c.env));
 });
+
+/** 2 つの文字列が同じか。ハッシュにしてから、かかる時間が中身によらない比べ方をする(時間の差からトークンを推測されないように) */
+async function sameText(a: string, b: string): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const [x, y] = await Promise.all([a, b].map((s) => crypto.subtle.digest('SHA-256', encoder.encode(s))));
+  return crypto.subtle.timingSafeEqual(x, y);
+}
 
 function parseDate(value: string | undefined): Date | null {
   if (!value) return null;
@@ -147,6 +257,13 @@ function parseList(value: string | undefined): string[] {
 function isVideoType(value: string): value is VideoType {
   return (VIDEO_TYPES as readonly string[]).includes(value);
 }
+
+/** 重なりを除いて並べる(順番や重なりだけが違う問い合わせを、同じキャッシュにまとめる) */
+const unique = <T extends string>(values: T[]) => [...new Set(values)].sort();
+
+const parseIdList = (value: string | undefined) =>
+  unique(parseList(value).filter((id) => id.length <= MAX_ID_LENGTH)).slice(0, MAX_CHANNEL_FILTER);
+const parseTypes = (value: string | undefined) => unique(parseList(value).filter(isVideoType));
 
 export default {
   fetch: app.fetch,
