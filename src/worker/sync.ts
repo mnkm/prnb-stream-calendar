@@ -21,6 +21,8 @@ import {
   endTwitchLivesStmt,
   fillSearchTitles,
   findActiveLives,
+  findLivesToWatch,
+  hasRecentUpload,
   findAvailabilityTargets,
   findPendingPlaylist,
   findSetlistAuditsToNotify,
@@ -81,20 +83,33 @@ import {
 } from './youtube';
 
 /**
- * 1 回の実行で使うサブリクエスト(YouTube への fetch + D1 の呼び出し)の予算。
- * Workers 無料プランの上限(50)から、最後の後片付け(検索用の列の補完)の分を残した値
+ * 1 回の実行で使うサブリクエスト(YouTube への fetch + D1 の呼び出し)の予算。暴走の歯止め。
+ * Workers Paid の上限(サブリクエスト 10,000、D1 の問い合わせ 1,000)に対して、十分小さい値にしている。
+ * 足りなくなったときは、後ろの処理(セトリ → 再生リスト → 再生できるかの確認)から次の実行に回る
  */
-const REQUEST_BUDGET = 45;
+const REQUEST_BUDGET = 300;
+/** 全体の同期(syncAll)の間隔。Cron は毎分で、この間隔の回だけ全体の同期を行う(src/worker/index.ts) */
+export const FULL_SYNC_INTERVAL_MS = 5 * 60_000;
 /**
  * 差分同期 1 チャンネル分に必要なサブリクエスト数の上限。
- * YouTube 5 回(RSS・UUMO・UUSH・UULF・videos.list)+ D1 3 回(読み取り 2・書き込み 1)+ プロフィール 2 回
+ * YouTube 5 回(RSS・UUMO・UUSH・UULF・videos.list)+ D1 4 回(読み取り 3・書き込み 1)+ プロフィール 2 回
  */
-const INCREMENTAL_REQUESTS = 10;
+const INCREMENTAL_REQUESTS = 11;
 /**
- * 1 回の実行で差分同期するチャンネル数。最後に同期してから時間がたったものから順に回す。
- * Cron は 5 分ごとなので、6 チャンネルならそれぞれ約 15 分ごとに同期される
+ * 差分同期で、種別の一覧(UUSH = ショート、UULF = 動画タブ)を、新しい動画が無くても確かめ直す間隔(全体の同期の回数)。
+ * 12 回 = 1 時間に 1 回。どの回に確かめるかは、時刻とチャンネルの並び順から決める(チャンネルごとに回をずらす)。
+ * 実行が 1 回抜けると、そのチャンネルの確かめ直しは次の 1 時間後になる
  */
-const INCREMENTAL_CHANNELS_PER_RUN = 2;
+const TYPE_CHECK_EVERY_RUNS = 12;
+/** 公開からこの時間のあいだは、差分同期のたびに種別の一覧を確かめ直す(一覧に載るのが遅れたショートを直すため) */
+const RECENT_UPLOAD_MS = 60 * 60_000;
+/** 開始・終了だけを見る軽い確認(syncLiveStatus)で使うサブリクエストの予算(D1 2 回 + videos.list 1 回で足りる) */
+const LIVE_STATUS_REQUEST_BUDGET = 6;
+/** 軽い確認で見る配信予定の範囲。開始の予定が、この時間だけ前から、この時間だけ先までのもの */
+const LIVE_STATUS_PAST_MS = 6 * 60 * 60_000;
+const LIVE_STATUS_AHEAD_MS = 10 * 60_000;
+/** 軽い確認で 1 回に見る配信の数(videos.list は 50 本で 1 unit) */
+const LIVE_STATUS_MAX_VIDEOS = 50;
 /** 過去分の取得やメンバー限定の取り込みを 1 ページ進めるのに必要な数(playlistItems + videos.list + D1 書き込み) */
 const PAGE_REQUESTS = 3;
 /**
@@ -182,21 +197,23 @@ export interface ChannelSyncResult {
 }
 
 /**
- * 5 分ごとの同期。リクエスト数の予算を、まず取り込み済みチャンネルの差分同期(新着・配信状況)に使い、
+ * 5 分ごとの、全体の同期。リクエスト数の予算を、まず取り込み済みチャンネルの差分同期(新着・配信状況)に使い、
  * 残りで過去分の取得と一度だけの補正を進める。チャンネルが増えても新着の反映が遅れないようにするため
  */
 export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
+  // この実行が何回目の全体の同期にあたるか(種別の一覧を確かめ直す回を決めるのに使う。時刻は最初に 1 回だけ取る)
+  const run = Math.floor(Date.now() / FULL_SYNC_INTERVAL_MS);
   const budget = new RequestBudget(REQUEST_BUDGET);
   const db = countD1(env.DB, budget);
   const yt = new YouTubeClient(env.YOUTUBE_API_KEY, budget);
   const channels = await listEnabledChannels(db);
   const results: ChannelSyncResult[] = [];
 
-  // 1. 取り込み済みチャンネルの差分同期。最後に同期してから時間がたったものから、決まった数だけ行う
+  // 1. 取り込み済みチャンネルの差分同期(全チャンネル)。予算が足りなくなったときに同じチャンネルばかり
+  //    後回しにならないよう、最後に同期してから時間がたったものから行う
   const due = channels
     .filter((c) => c.backfill_stage === 'done')
-    .sort((a, b) => (a.synced_at ?? '').localeCompare(b.synced_at ?? ''))
-    .slice(0, INCREMENTAL_CHANNELS_PER_RUN);
+    .sort((a, b) => (a.synced_at ?? '').localeCompare(b.synced_at ?? ''));
   for (const channel of due) {
     if (budget.remaining < INCREMENTAL_REQUESTS) {
       results.push(skipped(channel, 'incremental'));
@@ -205,7 +222,9 @@ export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
     results.push(
       await runSafely(channel, 'incremental', async () => {
         await ensureChannelProfile(db, yt, channel);
-        return incrementalSync(db, yt, channel);
+        // 種別の一覧を確かめ直す回か(チャンネルの並び順で回をずらし、1 回の実行に集中させない)
+        const typeCheckRun = (run + channels.indexOf(channel)) % TYPE_CHECK_EVERY_RUNS === 0;
+        return incrementalSync(db, yt, channel, typeCheckRun);
       }),
     );
   }
@@ -289,6 +308,30 @@ async function runSetlistStages(db: D1Database, yt: YouTubeClient, budget: Reque
   } catch (err) {
     console.error('setlist audit failed', err);
   }
+}
+
+/**
+ * 配信の開始・終了だけを見る軽い確認。全体の同期(5 分ごと)の合間に、毎分行う。
+ * 配信中のものと、開始の予定が近い配信予定(全チャンネル)を、まとめて videos.list で取り直す(50 本まで 1 unit)。
+ * 見る配信が無ければ、YouTube には問い合わせない。
+ * 新しい配信予定の検知や、消えた配信(削除・非公開)の扱いは、全体の同期に任せる
+ */
+export async function syncLiveStatus(env: SyncEnv): Promise<{ watched: number; updated: number }> {
+  const budget = new RequestBudget(LIVE_STATUS_REQUEST_BUDGET);
+  const db = countD1(env.DB, budget);
+  const now = Date.now();
+  const ids = await findLivesToWatch(
+    db,
+    toIsoSeconds(new Date(now - LIVE_STATUS_PAST_MS)),
+    toIsoSeconds(new Date(now + LIVE_STATUS_AHEAD_MS)),
+    LIVE_STATUS_MAX_VIDEOS,
+  );
+  if (ids.length === 0) return { watched: 0, updated: 0 };
+  const videos = await new YouTubeClient(env.YOUTUBE_API_KEY, budget).getVideos(ids);
+  // 配信はショートではない。プレミア公開かどうかは、公開中は長さから決まり、公開後は保存済みの種別が保たれる
+  // (upsertVideoStmts)ので、種別の一覧(UUSH・UULF)は見なくてよい
+  await writeBatch(db, upsertVideoStmts(db, videos.map((v) => toVideoRow(v, false, false)), nowIso()));
+  return { watched: ids.length, updated: videos.length };
 }
 
 const needsScan = (channel: ChannelRow) => !channel.premieres_scanned_at || !channel.members_scanned_at;
@@ -383,7 +426,12 @@ async function backfillStep(
 }
 
 /** 通常の差分同期。RSS で新着を検知し、新着 + 予定/配信中ライブだけを videos.list で取得する */
-async function incrementalSync(db: D1Database, yt: YouTubeClient, channel: ChannelRow): Promise<ChannelSyncResult> {
+async function incrementalSync(
+  db: D1Database,
+  yt: YouTubeClient,
+  channel: ChannelRow,
+  typeCheckRun: boolean,
+): Promise<ChannelSyncResult> {
   let latestIds: string[];
   try {
     latestIds = await yt.fetchRssVideoIds(channel.id);
@@ -403,13 +451,19 @@ async function incrementalSync(db: D1Database, yt: YouTubeClient, channel: Chann
   const activeLiveIds = activeLives.map((r) => r.id);
   const targetIds = [...new Set([...newIds, ...activeLiveIds])];
 
-  const shortsPage = await yt.listPlaylistPage(shortsPlaylistId(channel.id));
+  // 種別の一覧(UUSH = ショート、UULF = 動画タブ)は、新しい動画があったとき、公開されたばかりの動画があるあいだ、
+  // 1 時間に 1 回の確かめ直しの回、にだけ取る(毎回取ると、チャンネルごとに 2 unit ずつ使う)。
+  // undefined は「今回は取りに行かなかった」、null は「取りに行ったが、一覧が無かった」
+  const recentUpload = await hasRecentUpload(db, channel.id, toIsoSeconds(new Date(Date.now() - RECENT_UPLOAD_MS)));
+  const checkTypes = typeCheckRun || newIds.length > 0 || recentUpload;
+  const shortsPage = checkTypes ? await yt.listPlaylistPage(shortsPlaylistId(channel.id)) : undefined;
   const shortIds = new Set(shortsPage?.ids ?? []);
-  const videosPage = await yt.listPlaylistPage(videosPlaylistId(channel.id));
+  const videosPage = checkTypes ? await yt.listPlaylistPage(videosPlaylistId(channel.id)) : undefined;
   const premiereIds = new Set(videosPage?.ids ?? []);
   const videos = targetIds.length > 0 ? await yt.getVideos(targetIds) : [];
 
-  if (!shortsPage) {
+  // ショートの一覧が無いチャンネルでは、URL で 1 本ずつ確かめる(取りに行かなかった回には、やらない)
+  if (shortsPage === null) {
     try {
       for (const v of videos) {
         const duration = parseDuration(v.contentDetails?.duration);

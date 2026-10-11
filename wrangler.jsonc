@@ -32,8 +32,11 @@
     { "name": "SEARCH_LIMITER", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } }
   ],
 
-  // 5 分ごとに YouTube と同期。1 回に差分同期するのは 2 チャンネルまで(Workers 無料プランのサブリクエスト上限のため)
-  "triggers": { "crons": ["*/5 * * * *"] },
+  // 毎分動かす。5 分に 1 回は全体の同期(全チャンネルの差分同期など)、それ以外の回は、配信の開始・終了だけを見る
+  // 軽い確認(src/worker/index.ts の scheduled)。Workers Paid プランが前提(CPU 時間・サブリクエストの上限)。
+  // Cron の設定は、GitHub 連携の自動デプロイでは本番に反映されない。変えたときは、手元で
+  // 「npm run build」のあと「npx wrangler triggers deploy」を実行する
+  "triggers": { "crons": ["* * * * *"] },
 
   // セトリの点検で、問題が見つかったときに Issue を作るリポジトリ
   "vars": { "GITHUB_REPO": "mnkm/prnb-youtube-calendar" },

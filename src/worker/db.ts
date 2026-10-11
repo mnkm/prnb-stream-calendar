@@ -210,6 +210,41 @@ export async function findExistingVideoIds(db: D1Database, ids: string[]): Promi
   return new Set(results.map((r) => r.id));
 }
 
+/**
+ * チャンネルに、since 以降に公開されたライブ以外の動画があるか。
+ * 公開されたばかりのショートは、ショートの一覧(UUSH)に載るのが遅れて、いったん動画として登録されることがある。
+ * 公開からしばらくのあいだは、種別を確かめ直すために使う
+ */
+export async function hasRecentUpload(db: D1Database, channelId: string, since: string): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS found FROM videos
+        WHERE channel_id = ? AND platform = 'youtube' AND type != 'live' AND published_at >= ?
+        LIMIT 1`,
+    )
+    .bind(channelId, since)
+    .first<{ found: number }>();
+  return row !== null;
+}
+
+/**
+ * 開始・終了を細かく見る配信(全チャンネル)。配信中のものと、開始の予定が from〜to にある配信予定。
+ * 何か月も先の予定で置かれている待機所は、始まる時刻が近づくまで入らない
+ */
+export async function findLivesToWatch(db: D1Database, from: string, to: string, limit: number) {
+  const { results } = await db
+    .prepare(
+      `SELECT id FROM videos
+        WHERE platform = 'youtube'
+          AND (live_status = 'live' OR (live_status = 'upcoming' AND event_at >= ? AND event_at <= ?))
+        ORDER BY event_at
+        LIMIT ?`,
+    )
+    .bind(from, to, limit)
+    .all<{ id: string }>();
+  return results.map((r) => r.id);
+}
+
 /** 状態が変わりうる YouTube のライブ(予定・配信中)の ID。Twitch の配信は videos.list に返ってこないので含めない */
 export async function findActiveLives(db: D1Database, channelId: string) {
   const { results } = await db
