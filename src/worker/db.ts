@@ -190,7 +190,7 @@ export async function saveMembersScanProgress(db: D1Database, id: string, pageTo
 
 /**
  * 書き込みをまとめて 1 回の batch() で行う(null は飛ばす)。
- * Workers 無料プランでは D1 の呼び出し回数も 1 回の実行あたりの上限に数えられるため、書き込みはできるだけまとめる
+ * D1 の呼び出し回数は 1 回の実行あたりの予算(RequestBudget)に数えるので、書き込みはできるだけまとめる
  */
 export async function writeBatch(db: D1Database, stmts: (D1PreparedStatement | null)[]) {
   const list = stmts.filter((s): s is D1PreparedStatement => s !== null);
@@ -490,15 +490,19 @@ function matchSongs(songsJson: string, terms: string[]): MatchedSong[] {
 /** 1 曲分の検索用の文字列。曲名とアーティストをタブで区切る(検索語は空白を含まないので、またいで一致しない) */
 const songSearchText = (song: MatchedSong) => normalizeForSearch(`${song.title}\t${song.artist ?? ''}`);
 
-/** まだ曲を読み取っていない、または読み取りの規則が変わる前に読み取ったセトリ */
-export async function findSetlistsToParse(db: D1Database, version: number, limit: number) {
+/**
+ * まだ曲を読み取っていない、または読み取りの規則が変わる前に読み取ったセトリ。
+ * 本文は、読み取りが読む maxChars 文字までを返す(読まない分まで受け取らない)
+ */
+export async function findSetlistsToParse(db: D1Database, version: number, limit: number, maxChars: number) {
   const { results } = await db
     .prepare(
-      `SELECT video_id, text FROM setlists
+      `SELECT video_id, substr(text, 1, ?) AS text FROM setlists
         WHERE text IS NOT NULL AND (songs_version IS NULL OR songs_version != ?)
+        ORDER BY video_id
         LIMIT ?`,
     )
-    .bind(version, limit)
+    .bind(maxChars, version, limit)
     .all<{ video_id: string; text: string }>();
   return results;
 }
@@ -510,20 +514,32 @@ export function saveSetlistSongsStmt(db: D1Database, videoId: string, songs: Mat
     .bind(JSON.stringify(songs), songs.map(songSearchText).join('\n'), version, videoId);
 }
 
-/** セトリを確認する歌枠。まだ確認していないもの、または次に確認する日時を過ぎたものを、新しい順に */
+/**
+ * セトリを確認する歌枠。まだ確認していないもの、または次に確認する日時を過ぎたものを、新しい順に。
+ * セトリが見つかったあとも、次に確認する日時があるあいだは確認し直す(より良いコメントに差し替えるため)
+ */
 export async function findSetlistTargets(db: D1Database, now: string, notBefore: string, limit: number) {
   const { results } = await db
     .prepare(
-      `SELECT v.id, v.ended_at
+      `SELECT v.id, v.channel_id, v.ended_at, s.text IS NOT NULL AS has_setlist,
+              s.comment_id AS saved_comment_id, length(s.text) AS saved_chars
          FROM videos v LEFT JOIN setlists s ON s.video_id = v.id
         WHERE v.platform = 'youtube' AND v.type = 'live' AND v.live_status = 'ended' AND v.members_only = 0
-          AND v.title LIKE '%歌枠%' AND v.ended_at IS NOT NULL AND v.ended_at <= ?
-          AND (s.video_id IS NULL OR (s.text IS NULL AND s.next_check_at <= ?))
+          AND v.title LIKE '%歌枠%' AND v.ended_at IS NOT NULL AND v.ended_at <= ? AND v.unavailable_at IS NULL
+          AND (s.video_id IS NULL OR s.next_check_at <= ?)
         ORDER BY v.ended_at DESC
         LIMIT ?`,
     )
     .bind(notBefore, now, limit)
-    .all<{ id: string; ended_at: string }>();
+    .all<{
+      id: string;
+      channel_id: string;
+      ended_at: string;
+      /** すでにセトリが保存されているか。保存されていれば、そのコメントの ID と、本文の文字数(コードポイントの数) */
+      has_setlist: number;
+      saved_comment_id: string | null;
+      saved_chars: number | null;
+    }>();
   return results;
 }
 
@@ -534,16 +550,24 @@ export interface SetlistResult {
   nextCheckAt: string | null;
 }
 
+/**
+ * 確認の結果を保存する。今回セトリのコメントが見つからなくても、前に見つけたものは残す。
+ * 読み取った曲は、コメントが変わったとき(別のコメントになった・書き直された)だけ消して、読み取り直す
+ */
 export function saveSetlistStmt(db: D1Database, r: SetlistResult) {
   return db
     .prepare(
       `INSERT INTO setlists (video_id, comment_id, author, text, checked_at, next_check_at)
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT (video_id) DO UPDATE SET
-         comment_id = excluded.comment_id, author = excluded.author, text = excluded.text,
+         comment_id = CASE WHEN excluded.text IS NULL THEN comment_id ELSE excluded.comment_id END,
+         author = CASE WHEN excluded.text IS NULL THEN author ELSE excluded.author END,
+         text = COALESCE(excluded.text, text),
          checked_at = excluded.checked_at, next_check_at = excluded.next_check_at,
-         -- 読み取った曲は、同じ実行の中で読み取り直す(parseSetlistSongs)
-         songs = NULL, search_songs = NULL, songs_version = NULL`,
+         -- 右辺の列は更新前の値。コメントが変わったら、同じ実行の中で読み取り直す(parseSetlistSongs)
+         songs = CASE WHEN excluded.text IS NULL OR excluded.text IS text THEN songs ELSE NULL END,
+         search_songs = CASE WHEN excluded.text IS NULL OR excluded.text IS text THEN search_songs ELSE NULL END,
+         songs_version = CASE WHEN excluded.text IS NULL OR excluded.text IS text THEN songs_version ELSE NULL END`,
     )
     .bind(r.videoId, r.comment?.id ?? null, r.comment?.author ?? null, r.comment?.text ?? null, r.checkedAt, r.nextCheckAt);
 }
@@ -577,7 +601,7 @@ export async function findSetlistsToAudit(db: D1Database, limit: number) {
          FROM setlists s JOIN videos v ON v.id = s.video_id
         WHERE (s.audited_at IS NULL OR s.audited_at < s.checked_at)
           AND (s.text IS NOT NULL OR s.next_check_at IS NULL)
-        ORDER BY s.checked_at
+        ORDER BY s.checked_at, s.video_id
         LIMIT ?`,
     )
     .bind(limit)
@@ -958,14 +982,14 @@ export function upsertTwitchArchiveStmts(db: D1Database, rows: TwitchArchiveRow[
  * 公開が終わった(一覧から消えた)アーカイブの動画 ID を外し、再生できなくなったことを残す。カレンダーの記録は残す
  */
 export function clearExpiredTwitchArchivesStmt(db: D1Database, channelId: string, currentVideoIds: string[], now: string) {
-  const notCurrent =
-    currentVideoIds.length > 0 ? `AND twitch_video_id NOT IN (${placeholders(currentVideoIds.length)})` : '';
+  // 動画 ID は JSON の配列 1 つで渡す(1 つずつ渡すと、アーカイブが 100 本近いチャンネルで D1 の変数の上限 100 個を超える)
   return db
     .prepare(
       `UPDATE videos SET twitch_video_id = NULL, unavailable_at = ?
-        WHERE channel_id = ? AND platform = 'twitch' AND twitch_video_id IS NOT NULL ${notCurrent}`,
+        WHERE channel_id = ? AND platform = 'twitch' AND twitch_video_id IS NOT NULL
+          AND twitch_video_id NOT IN (SELECT value FROM json_each(?))`,
     )
-    .bind(now, channelId, ...currentVideoIds);
+    .bind(now, channelId, JSON.stringify(currentVideoIds));
 }
 
 /** Twitch のチャンネルの同期の結果を残す。profile は 1 日 1 回の確認をしたときだけ渡す */

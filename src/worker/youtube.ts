@@ -41,14 +41,48 @@ export interface YtChannel {
   brandingSettings?: { image?: { bannerExternalUrl?: string } };
 }
 
-interface YtCommentThread {
-  snippet: { topLevelComment: { id: string; snippet: { authorDisplayName: string; textDisplay: string } } };
+interface YtCommentSnippet {
+  authorDisplayName: string;
+  textDisplay: string;
+  authorChannelId?: { value?: string };
+  likeCount?: number;
+  publishedAt?: string;
 }
+
+interface YtCommentThread {
+  snippet: { topLevelComment: { id: string; snippet: YtCommentSnippet }; totalReplyCount?: number };
+}
+
+/**
+ * コメントを取るときの、応答の大きさの上限(バイト)。暴走の歯止め。
+ * コメントは誰でも書けて 1 件 10,000 文字まであるので、応答は最大で数 MB になりうる(一覧 20 件・返信 100 件)。
+ * ふつうの歌枠の応答は、一覧で 10〜16KB、返信で 7KB ほど(必要な項目だけを返してもらった大きさ)
+ */
+const COMMENTS_MAX_BYTES = 5_000_000;
+
+/** コメントへの返信 */
+export interface YtReply {
+  text: string;
+  /** 書き手のチャンネル ID(取れなければ null) */
+  authorChannelId: string | null;
+  publishedAt: string;
+}
+
+const toReply = (snippet: YtCommentSnippet): YtReply => ({
+  text: snippet.textDisplay,
+  authorChannelId: snippet.authorChannelId?.value ?? null,
+  publishedAt: snippet.publishedAt ?? '',
+});
 
 export interface YtComment {
   id: string;
   author: string;
   text: string;
+  /** 書き手のチャンネル ID(取れなければ null) */
+  authorChannelId: string | null;
+  likeCount: number;
+  /** 返信の数(返信そのものは getReplies で取る) */
+  replyCount: number;
 }
 
 export interface YtPlaylist {
@@ -68,6 +102,9 @@ export interface PlaylistPage {
   ids: string[];
   nextPageToken?: string;
 }
+
+/** 応答が、決めた大きさの上限を超えた */
+export class ResponseTooLargeError extends Error {}
 
 export class YouTubeApiError extends Error {
   readonly status: number;
@@ -110,16 +147,22 @@ export class YouTubeClient {
     return fetch(input, init);
   }
 
-  private async get<T>(resource: string, params: Record<string, string>): Promise<T> {
+  /** maxBytes を渡すと、応答がそれより大きいときに、解析せずに ResponseTooLargeError にする(本文は受け取ってから大きさを見る) */
+  private async get<T>(resource: string, params: Record<string, string>, maxBytes?: number): Promise<T> {
     const url = new URL(`${API_BASE}/${resource}`);
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-    url.searchParams.set('key', this.apiKey);
 
-    const res = await this.request(url);
+    // API キーは URL ではなくヘッダーで渡す(URL は Workers のトレースなどに記録される)
+    const res = await this.request(url, { headers: { 'X-Goog-Api-Key': this.apiKey } });
     if (!res.ok) {
       throw new YouTubeApiError(res.status, `YouTube ${resource} failed: ${res.status} ${await res.text()}`);
     }
-    return res.json<T>();
+    if (maxBytes === undefined) return res.json<T>();
+    const body = await res.arrayBuffer();
+    if (body.byteLength > maxBytes) {
+      throw new ResponseTooLargeError(`YouTube ${resource} response too large: ${body.byteLength} bytes`);
+    }
+    return JSON.parse(new TextDecoder().decode(body)) as T;
   }
 
   /** 1 unit */
@@ -228,11 +271,16 @@ export class YouTubeClient {
         order: 'relevance',
         maxResults: String(max),
         textFormat: 'plainText',
-      });
+        // 使う項目だけを返してもらう(応答が 3 分の 1 ほどになる)
+        fields: 'items(snippet(totalReplyCount,topLevelComment(id,snippet(authorDisplayName,textDisplay,authorChannelId,likeCount))))',
+      }, COMMENTS_MAX_BYTES);
       return (data.items ?? []).map((t) => ({
         id: t.snippet.topLevelComment.id,
         author: t.snippet.topLevelComment.snippet.authorDisplayName,
         text: t.snippet.topLevelComment.snippet.textDisplay,
+        authorChannelId: t.snippet.topLevelComment.snippet.authorChannelId?.value ?? null,
+        likeCount: t.snippet.topLevelComment.snippet.likeCount ?? 0,
+        replyCount: t.snippet.totalReplyCount ?? 0,
       }));
     } catch (err) {
       // 403 はクォータ超過などでも返るので、コメントが無効な場合(commentsDisabled)だけを見分ける
@@ -240,6 +288,20 @@ export class YouTubeClient {
       if (disabled || (err instanceof YouTubeApiError && err.status === 404)) return null;
       throw err;
     }
+  }
+
+  /**
+   * コメントへの返信(古い順に max 件まで。API の上限は 100 件)。1 unit
+   */
+  async getReplies(commentId: string, max: number): Promise<YtReply[]> {
+    const data = await this.get<{ items?: { snippet: YtCommentSnippet }[] }>('comments', {
+      part: 'snippet',
+      parentId: commentId,
+      maxResults: String(max),
+      textFormat: 'plainText',
+      fields: 'items(snippet(textDisplay,authorChannelId,publishedAt))',
+    }, COMMENTS_MAX_BYTES);
+    return (data.items ?? []).map((r) => toReply(r.snippet));
   }
 
   /** 1 unit / 50 件。非公開・削除済みの動画は結果に含まれない */

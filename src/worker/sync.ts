@@ -1,5 +1,11 @@
-import { SETLIST_PARSER_VERSION, countTimestamps, parseSetlist } from '../shared/setlist';
-import { auditSetlist, problemSignature } from '../shared/setlist-audit';
+import {
+  SETLIST_MAX_CHARS,
+  SETLIST_PARSER_VERSION,
+  mergeSetlistReplies,
+  parseSetlist,
+  pickSetlistComment,
+} from '../shared/setlist';
+import { type SetlistProblem, auditSetlist, problemSignature } from '../shared/setlist-audit';
 import type { LiveStatus } from '../shared/types';
 import { RequestBudget, countD1 } from './budget';
 import {
@@ -63,6 +69,8 @@ import {
   type YtChannel,
   type YtComment,
   type YtVideo,
+  ResponseTooLargeError,
+  YouTubeApiError,
   YouTubeClient,
   membersPlaylistId,
   membersVideosPlaylistId,
@@ -96,18 +104,23 @@ const PAGE_REQUESTS = 3;
 const BACKFILL_PAGES_PER_RUN = 8;
 /** 1 回の実行で search_title を埋める件数 */
 const SEARCH_TITLE_FILL_PER_RUN = 1000;
-/** 1 回の実行でセトリを確認する歌枠の数(過去分の確認が多いあいだも、CPU 時間が増えすぎないように) */
+/** 1 回の実行でセトリを確認する歌枠の数 */
 const SETLIST_CHECKS_PER_RUN = 10;
-/** セトリを確認する時刻(配信終了からの時間)。セトリのコメントは終了後しばらくして書かれることが多い */
-const SETLIST_CHECK_HOURS = [1, 6, 24, 72, 168];
+/**
+ * セトリを確認する時刻(配信終了からの時間)。セトリのコメントは終了後しばらくして書かれることが多い。
+ * 見つかったあとも最後の時刻までは確認を続け、より良いコメント(配信者本人・高評価の多いもの)があれば差し替える
+ * (コメントは誰でも書けるので、最初に見つけたものを確定にすると、先に書かれた別の内容が残り続ける)。
+ * 早い時刻の確認では、書きかけのセトリや時刻つきの感想が先に保存されることがある(あとの確認で置き換わる)
+ */
+const SETLIST_CHECK_HOURS = [0.25, 0.5, 1, 6, 24, 72, 168];
 /** 関連性順で確認するコメントの数(固定コメントは先頭に来るが、固定されていないセトリも拾うため) */
 const SETLIST_COMMENTS = 20;
-/** セトリとみなすコメントに含まれるタイムスタンプの数 */
-const SETLIST_MIN_TIMESTAMPS = 3;
-/** 1 回の実行で、検索用に曲を読み取って保存するセトリの数(読み取りは 1 本 0.3ms ほど) */
-const SETLIST_PARSES_PER_RUN = 20;
-/** 1 回の実行で点検するセトリの数(読み取りは 1 本 0.3ms ほど) */
-const SETLIST_AUDITS_PER_RUN = 20;
+/** セトリの続きを探す返信の数(古い順。comments.list で 1 回に取れる上限) */
+const SETLIST_REPLIES = 100;
+/** 1 回の実行で、検索用に曲を読み取って保存するセトリの数の上限 */
+const SETLIST_PARSES_PER_RUN = 50;
+/** 1 回の実行で点検するセトリの数の上限 */
+const SETLIST_AUDITS_PER_RUN = 50;
 /** セトリの点検の Issue を作る時刻(JST)。この時刻を過ぎた最初の実行で、1 日 1 回まで作る */
 const SETLIST_AUDIT_NOTIFY_HOUR_JST = 9;
 /** 1 つの Issue に載せる歌枠の数の上限(残りは次の日に回す) */
@@ -169,7 +182,7 @@ export interface ChannelSyncResult {
 }
 
 /**
- * 15 分ごとの同期。リクエスト数の予算を、まず取り込み済みチャンネルの差分同期(新着・配信状況)に使い、
+ * 5 分ごとの同期。リクエスト数の予算を、まず取り込み済みチャンネルの差分同期(新着・配信状況)に使い、
  * 残りで過去分の取得と一度だけの補正を進める。チャンネルが増えても新着の反映が遅れないようにするため
  */
 export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
@@ -221,27 +234,8 @@ export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
     );
   }
 
-  // 3. 残りの予算で、配信が終わった歌枠のセトリを確認する
-  try {
-    await checkSetlists(db, yt, budget);
-  } catch (err) {
-    console.error('checkSetlists failed', err);
-  }
-
-  // 検索で曲名・アーティストも探せるよう、セトリから曲を読み取って保存する(新しく見つかったもの、読み取りの規則が変わったもの)
-  try {
-    await parseSetlistSongs(db, budget);
-  } catch (err) {
-    console.error('parseSetlistSongs failed', err);
-  }
-
-  // 4. 取得したセトリを点検し、問題があれば 1 日 1 回 GitHub の Issue で知らせる
-  try {
-    await auditSetlists(db, budget);
-    if (env.GITHUB_TOKEN && env.GITHUB_REPO) await notifySetlistAudits(db, budget, env.GITHUB_TOKEN, env.GITHUB_REPO);
-  } catch (err) {
-    console.error('setlist audit failed', err);
-  }
+  // 3. 残りの予算で、セトリの処理をする(通知・確認・曲の読み取り・点検)
+  await runSetlistStages(db, yt, budget, env);
 
   // 5. 残りの予算で、再生リストの一覧(1 日 1 回)と、本数が変わった再生リストの中身を読む
   try {
@@ -264,6 +258,37 @@ export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
     console.error('fillSearchTitles failed', err);
   }
   return results;
+}
+
+/**
+ * セトリの処理。確認 → 曲の読み取り → 点検 → 通知 の順に行う(確認で見つかったセトリの曲が、同じ実行の中で
+ * 検索に入る)。それぞれ、1 回の実行で扱う本数に上限がある。
+ * セトリのもとになるコメントは誰でも書けるので、1 件あたりの大きさには上限を設けている(読み取りは
+ * SETLIST_MAX_CHARS 文字まで、応答は youtube.ts の COMMENTS_MAX_BYTES まで)。上限いっぱいに細工された入力が
+ * 本数の上限まで並んでも、1 回の実行は 1〜2 秒ほどで(開発機での見積もり)、Workers Paid の CPU 時間の上限(30 秒)に収まる
+ */
+async function runSetlistStages(db: D1Database, yt: YouTubeClient, budget: RequestBudget, env: SyncEnv) {
+  // 配信が終わった歌枠のセトリを確認する
+  try {
+    await checkSetlists(db, yt, budget);
+  } catch (err) {
+    console.error('checkSetlists failed', err);
+  }
+
+  // 検索で曲名・アーティストも探せるよう、セトリから曲を読み取って保存する(新しく見つかったもの、読み取りの規則が変わったもの)
+  try {
+    await parseSetlistSongs(db, budget);
+  } catch (err) {
+    console.error('parseSetlistSongs failed', err);
+  }
+
+  // 取得したセトリを点検し、問題があれば 1 日 1 回 GitHub の Issue で知らせる
+  try {
+    await auditSetlists(db, budget);
+    if (env.GITHUB_TOKEN && env.GITHUB_REPO) await notifySetlistAudits(db, budget, env.GITHUB_TOKEN, env.GITHUB_REPO);
+  } catch (err) {
+    console.error('setlist audit failed', err);
+  }
 }
 
 const needsScan = (channel: ChannelRow) => !channel.premieres_scanned_at || !channel.members_scanned_at;
@@ -725,8 +750,10 @@ async function twitchArchiveStmts(
 }
 
 /**
- * 歌枠のセトリを確認する。関連性順の上位コメントから、タイムスタンプを多く含む最初のものをセトリとして保存する。
- * 見つからなければ、配信終了の 1・6・24 時間後、3・7 日後に確認し直し、7 日を過ぎたらあきらめる
+ * 歌枠のセトリを確認する。関連性順の上位コメントから、タイムスタンプを多く含むものをセトリとして保存する
+ * (選び方は pickSetlistComment)。同じ書き手が返信で続きを書いていれば、つなげて保存する(mergeSetlistReplies)。
+ * 配信終了の 15 分後・30 分後、1・6・24 時間後、3・7 日後に確認し(SETLIST_CHECK_HOURS)、見つかったあとも 7 日後までは
+ * 確認し直して、より良いコメントがあれば差し替える。7 日を過ぎたら確認をやめる(見つかっていなければあきらめる)
  */
 async function checkSetlists(db: D1Database, yt: YouTubeClient, budget: RequestBudget) {
   // 対象の読み取り 1 回 + 書き込み 1 回 + 1 本以上の確認が入らなければ、次回に回す
@@ -739,28 +766,96 @@ async function checkSetlists(db: D1Database, yt: YouTubeClient, budget: RequestB
   for (const target of targets) {
     if (budget.remaining <= 1) break; // 最後の書き込みの分を残す
     let comments: YtComment[] | null;
+    let found: YtComment | null = null;
     try {
       comments = await yt.getTopComments(target.id, SETLIST_COMMENTS);
+      const picked = comments ? pickSetlistComment(comments, target.channel_id) : null;
+      // 曲として読めると確かめられなかった候補では、すでに保存してあるセトリを置き換えない
+      // (時刻つきの感想が上位に並んだだけで、前に取れた正しいセトリが消えないように)
+      found = picked && (picked.verified || !target.has_setlist) ? picked.comment : null;
+      if (found && found.replyCount > 0) {
+        // セトリが返信に分けて続けられていれば、つなげる
+        if (budget.remaining <= 1) break; // 最後の書き込みの分を残す(この歌枠は次回に確認する)
+        try {
+          const replies = await yt.getReplies(found.id, SETLIST_REPLIES);
+          found = { ...found, text: mergeSetlistReplies(found, replies) };
+        } catch (err) {
+          // 返信を読めなかった(大きすぎる、そのコメントの返信だけが取れない)ときは、最初のコメントだけで考える
+          if (!isReplySpecificError(err)) throw err;
+          console.warn(`setlist replies unreadable for ${target.id}`, err);
+          if (!replacesSavedWithoutReplies(target, found)) found = null;
+        }
+      }
     } catch (err) {
-      // クォータ超過などで続けられないときは、ここまでの結果だけ保存する
       console.warn(`setlist check failed for ${target.id}`, err);
-      break;
+      // 予算切れ・クォータ超過・YouTube 側の一時的な不調など、ほかの動画でも同じように失敗するときは、
+      // ここまでの結果だけ保存する
+      if (!isVideoSpecificError(err)) break;
+      // この動画だけの失敗(非公開になったなど)は、次の確認日時まで後回しにして先へ進む
+      // (何も書かないと、毎回この動画で止まり、これより古い歌枠が確認されなくなる)
+      stmts.push(
+        saveSetlistStmt(db, {
+          videoId: target.id,
+          comment: null,
+          checkedAt: toIsoSeconds(now),
+          nextCheckAt: nextSetlistCheck(target.ended_at, now),
+        }),
+      );
+      continue;
     }
-    const found = comments?.find((c) => countTimestamps(c.text) >= SETLIST_MIN_TIMESTAMPS) ?? null;
     stmts.push(
       saveSetlistStmt(db, {
         videoId: target.id,
         comment: found,
         checkedAt: toIsoSeconds(now),
-        // コメントが無効な配信や、見つかった配信は、もう確認しない
-        nextCheckAt: found || comments === null ? null : nextSetlistCheck(target.ended_at, now),
+        // コメントが無効な配信は、もう確認しない
+        nextCheckAt: comments === null ? null : nextSetlistCheck(target.ended_at, now),
       }),
     );
   }
   await writeBatch(db, stmts);
 }
 
-/** 次にセトリを確認する日時。配信終了から 7 日を過ぎていれば null(あきらめる) */
+/**
+ * 返信の取得の失敗が、そのコメントの返信だけのものか(応答が大きすぎる、返信が取れない 4xx)。
+ * コメントの一覧は直前に取れているので、クォータ超過・回数制限・サーバー側のエラー以外は、ほかの歌枠には関係しない。
+ * 何も書かずに止めると、その歌枠が毎回先頭に来て、同じところで止まり続ける
+ */
+function isReplySpecificError(err: unknown) {
+  if (err instanceof ResponseTooLargeError) return true;
+  if (!(err instanceof YouTubeApiError) || err.status < 400 || err.status >= 500 || err.status === 429) return false;
+  return !/quotaExceeded|rateLimitExceeded|dailyLimitExceeded/i.test(err.message);
+}
+
+/**
+ * 返信を読めなかったときに、最初のコメントだけで保存してよいか。
+ * - まだ何も保存されていなければ、保存する(何も無いよりよい。次の確認で返信が読めれば、つなげたものに置き換わる)
+ * - 保存済みと同じコメントなら、保存しない(保存済みは返信をつなげたものかもしれず、最初のコメントだけに縮めてしまう。
+ *   誰でも長い返信を書けるので、それだけで保存済みのセトリを短くされないように)
+ * - 保存済みと違うコメントなら、保存済みより長いときだけ保存する(保存済みが、確かめられずに保存された感想などの
+ *   こともあるので、いつまでも残さない。短いもので置き換えて、つなげたセトリを縮めることもしない)
+ */
+function replacesSavedWithoutReplies(
+  target: { has_setlist: number; saved_comment_id: string | null; saved_chars: number | null },
+  comment: { id: string; text: string },
+): boolean {
+  if (!target.has_setlist) return true;
+  if (target.saved_comment_id === comment.id) return false;
+  // saved_chars は SQLite の length(コードポイントの数)なので、同じ数え方で比べる
+  return Array.from(comment.text).length > (target.saved_chars ?? 0);
+}
+
+/**
+ * YouTube が、その動画についてだけ返す失敗か。403 のうち理由が forbidden のもの(非公開の動画のコメントなど)だけを
+ * そう扱う。クォータ超過や API キーの問題も 403 で返るが、それらはほかの動画でも同じように失敗する
+ */
+function isVideoSpecificError(err: unknown) {
+  // 応答が大きすぎる歌枠(長いコメントを何件も書かれたもの)も、その歌枠だけの失敗として後回しにする
+  if (err instanceof ResponseTooLargeError) return true;
+  return err instanceof YouTubeApiError && err.status === 403 && /"reason":\s*"forbidden"/.test(err.message);
+}
+
+/** 次にセトリを確認する日時。配信終了から 7 日を過ぎていれば null(確認をやめる) */
 function nextSetlistCheck(endedAt: string, now: Date): string | null {
   const ended = Date.parse(endedAt);
   const next = SETLIST_CHECK_HOURS.map((h) => ended + h * 3600_000).find((t) => t > now.getTime());
@@ -773,11 +868,17 @@ function nextSetlistCheck(endedAt: string, now: Date): string | null {
  */
 async function parseSetlistSongs(db: D1Database, budget: RequestBudget) {
   if (budget.remaining < 2) return;
-  const rows = await findSetlistsToParse(db, SETLIST_PARSER_VERSION, SETLIST_PARSES_PER_RUN);
+  const rows = await findSetlistsToParse(db, SETLIST_PARSER_VERSION, SETLIST_PARSES_PER_RUN, SETLIST_MAX_CHARS);
   await writeBatch(
     db,
     rows.map((row) => {
-      const songs = parseSetlist(row.text).map(({ title, artist }) => ({ title, artist }));
+      let songs: { title: string; artist: string | null }[] = [];
+      try {
+        songs = parseSetlist(row.text).map(({ title, artist }) => ({ title, artist }));
+      } catch (err) {
+        // 読み取れないセトリが 1 本あっても、同じ行で毎回止まらないよう、曲なしで保存して先へ進む
+        console.error(`parseSetlist failed for ${row.video_id}`, err);
+      }
       return saveSetlistSongsStmt(db, row.video_id, songs, SETLIST_PARSER_VERSION);
     }),
   );
@@ -789,7 +890,14 @@ async function auditSetlists(db: D1Database, budget: RequestBudget) {
   const rows = await findSetlistsToAudit(db, SETLIST_AUDITS_PER_RUN);
   const now = toIsoSeconds(new Date());
   const stmts = rows.flatMap((row) => {
-    const problems = auditSetlist(row.text, row.duration_sec);
+    let problems: SetlistProblem[];
+    try {
+      problems = auditSetlist(row.text, row.duration_sec);
+    } catch (err) {
+      // 点検できないセトリが 1 本あっても、同じ行で毎回止まらないよう、問題として残して先へ進む
+      console.error(`auditSetlist failed for ${row.video_id}`, err);
+      problems = [{ kind: 'error', message: '読み取りの途中でエラーになった', songs: [] }];
+    }
     return saveSetlistAuditStmts(db, {
       videoId: row.video_id,
       problems,
@@ -813,9 +921,11 @@ async function notifySetlistAudits(db: D1Database, budget: RequestBudget, token:
   const todayStart = new Date(Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth(), jst.getUTCDate()) - 9 * 3600_000);
   const rows = await findSetlistAuditsToNotify(db, toIsoSeconds(todayStart), SETLIST_AUDITS_PER_ISSUE);
   if (rows.length === 0) return;
-  const url = await createIssue(budget, token, repo, buildSetlistAuditIssue(rows, now));
+  // 本文の長さの上限に収まらなかった分は、印を付けずに次の日に回す
+  const { issue, videoIds } = buildSetlistAuditIssue(rows, now);
+  const url = await createIssue(budget, token, repo, issue);
   console.log(`setlist audit issue created: ${url}`);
-  await writeBatch(db, markSetlistAuditsNotifiedStmts(db, rows.map((r) => r.video_id), toIsoSeconds(now)));
+  await writeBatch(db, markSetlistAuditsNotifiedStmts(db, videoIds, toIsoSeconds(now)));
 }
 
 /**

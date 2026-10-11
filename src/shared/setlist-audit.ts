@@ -1,4 +1,13 @@
-import { type SetlistSong, countTimestamps, formatSetlistTime, parseSetlist } from './setlist';
+import {
+  SETLIST_MAX_CHARS,
+  SETLIST_MAX_LINES,
+  type SetlistSong,
+  countTimestamps,
+  formatSetlistTime,
+  isSetlistTruncated,
+  setlistLineCount,
+  parseSetlist,
+} from './setlist';
 
 /**
  * セトリの点検。表示と同じ読み取り(parseSetlist)にかけ、正しく表示されていない可能性があるものを見つける。
@@ -14,7 +23,9 @@ export type SetlistProblemKind =
   | 'backwards'
   | 'over_duration'
   | 'no_artist'
-  | 'too_long';
+  | 'too_long'
+  | 'truncated'
+  | 'error';
 
 export interface SetlistProblem {
   kind: SetlistProblemKind;
@@ -47,8 +58,19 @@ export function auditSetlist(text: string | null, durationSec: number | null): S
     return [{ kind: 'not_found', message: '配信終了から 7 日たっても、セトリのコメントが見つからない', songs: [] }];
   }
   const songs = parseSetlist(text);
+  // 読み取りの上限を超えたコメントは、上限より先に書かれた曲が出ない
+  const problems: SetlistProblem[] = isSetlistTruncated(text)
+    ? [
+        {
+          kind: 'truncated',
+          message: `コメントが長く、途中までしか読んでいない(読むのは ${SETLIST_MAX_LINES} 行・${SETLIST_MAX_CHARS} 文字まで。このコメントは ${setlistLineCount(text)} 行・${text.length} 文字)`,
+          songs: [],
+        },
+      ]
+    : [];
   if (songs.length === 0) {
     return [
+      ...problems,
       {
         kind: 'no_songs',
         message: `コメントに時刻が ${countTimestamps(text)} 個あるのに、曲が 1 曲も読み取れない(セトリ欄が出ない)`,
@@ -57,7 +79,6 @@ export function auditSetlist(text: string | null, durationSec: number | null): S
     ];
   }
 
-  const problems: SetlistProblem[] = [];
   const add = (kind: SetlistProblemKind, message: string, list: SetlistSong[]) => {
     if (list.length > 0) problems.push({ kind, message, songs: list.map(label) });
   };
