@@ -46,7 +46,7 @@
   "triggers": { "crons": ["* * * * *"] },
 
   // セトリの点検で、問題が見つかったときに Issue を作るリポジトリ
-  "vars": { "GITHUB_REPO": "mnkm/prnb-youtube-calendar" },
+  "vars": { "GITHUB_REPO": "mnkm/prnb-stream-calendar" },
 
   // main 以外のブランチの push で Workers Builds が作るプレビュー(wrangler preview)の設定。
   // Wrangler 4.147 からこの項目が無いとプレビューのビルドが失敗する。D1 などはプレビューに引き継がれないので、

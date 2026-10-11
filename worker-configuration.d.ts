@@ -5,7 +5,7 @@ interface __BaseEnv_Env {
 	DB: D1Database;
 	API_LIMITER: RateLimit;
 	SEARCH_LIMITER: RateLimit;
-	GITHUB_REPO: "mnkm/prnb-youtube-calendar";
+	GITHUB_REPO: "mnkm/prnb-stream-calendar";
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
