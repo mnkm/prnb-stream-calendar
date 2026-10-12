@@ -13,6 +13,7 @@ favicon などのアイコンには [MingCute Icons](https://github.com/mingcute
 | --- | --- | --- |
 | `public/favicon.svg` | favicon（`calendar_2_line`） | 0.8 倍に縮小し、白い線にして、グラデーションの角丸の背景に重ねた |
 | `src/client/components/ChannelDialog.tsx` | 楽曲リストのサイトへのボタンのアイコン（`playlist_fill`） | 形（path）のみを使い、色は `currentColor` |
+| `src/client/components/Header.tsx` | サイトの説明を開くボタンのアイコン（`information_line`） | 形（path）のみを使い、色は `currentColor` |
 
 ### Apache License 2.0
 

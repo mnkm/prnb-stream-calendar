@@ -5,8 +5,31 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="PROJECT NEBULA 公式および所属タレントの YouTube チャンネルの 動画・ショート・ライブ配信 と、Twitch の 配信・クリップ をカレンダーで表示する Web アプリ。 ファンメイドの非公式ツールです。 PROJECT NEBULA および所属タレントの公式のものではなく、運営・タレントとは関係のない個人が作成・運用しています。"
+      content="VTuber事務所「PROJECT NEBULA（ぷろねぶ）」所属タレントのYouTubeチャンネルで公開されている動画・ショート・ライブ配信およびTwitchで公開されている配信・クリップをカレンダーで表示するWebアプリ"
     />
+    <link rel="canonical" href="https://mnkm.page/prnb-stream-calendar/" />
+    <!-- 構造化データ(検索エンジン向けのサイト情報)。実行されないデータなので、CSP の script-src の対象にならない -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "PROJECT NEBULA Stream Calendar",
+        "url": "https://mnkm.page/prnb-stream-calendar/",
+        "inLanguage": "ja",
+        "applicationCategory": "EntertainmentApplication",
+        "operatingSystem": "Any",
+        "isAccessibleForFree": true,
+        "description": "VTuber事務所「PROJECT NEBULA（ぷろねぶ）」所属タレントのYouTubeチャンネルで公開されている動画・ショート・ライブ配信およびTwitchで公開されている配信・クリップをカレンダーで表示するWebアプリ",
+        "about": [
+          { "@type": "Organization", "name": "PROJECT NEBULA", "alternateName": "ぷろねぶ" },
+          { "@type": "Person", "name": "桃瀬にな" },
+          { "@type": "Person", "name": "碓氷ゆら" },
+          { "@type": "Person", "name": "鈴莉れん" },
+          { "@type": "Person", "name": "菜鳥ひなた" },
+          { "@type": "Person", "name": "紫雨るか" }
+        ]
+      }
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -20,6 +43,13 @@
   </head>
   <body>
     <div id="root"></div>
+    <!--
+      サイトの説明。画面は JavaScript が #root に描くので、そのままだと HTML に本文が無い。検索エンジンが JavaScript を
+      動かす前でも内容を読めるよう、#root の外に文章で置く。画面には出さない(同じ説明は、ヘッダーの i ボタンで開ける)
+    -->
+    <p class="sr-only">
+      PROJECT NEBULA Stream Calendar は、VTuber事務所「PROJECT NEBULA（ぷろねぶ）」所属タレント（桃瀬にな・碓氷ゆら・鈴莉れん・菜鳥ひなた・紫雨るか）のYouTubeチャンネルで公開されている動画・ショート・ライブ配信およびTwitchで公開されている配信・クリップをカレンダーで表示するWebアプリです。
+    </p>
     <script type="module" src="/src/client/main.tsx"></script>
   </body>
 </html>
