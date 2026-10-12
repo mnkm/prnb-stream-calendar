@@ -37,15 +37,15 @@ interface Props {
 export function Header({ view, onViewChange, search, onOpenChannelList }: Props) {
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-canvas/70 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-7xl items-center gap-1.5 px-4 py-3 sm:gap-3 sm:px-6">
+      <div className="relative mx-auto flex max-w-7xl items-center gap-1.5 px-4 py-3 sm:gap-3 sm:px-6">
         <SiteIcon />
-        <div className="hidden min-w-0 flex-1 sm:block">
+        <h1 className="hidden min-w-0 flex-1 sm:block">
           {['PROJECT NEBULA', 'Stream Calendar'].map((line) => (
-            <p key={line} className="truncate text-[11px] font-medium tracking-[0.18em] text-muted uppercase">
+            <span key={line} className="block truncate text-[11px] font-medium tracking-[0.18em] text-muted uppercase">
               {line}
-            </p>
+            </span>
           ))}
-        </div>
+        </h1>
 
         <div className="flex-1 sm:hidden" />
         <button
@@ -70,6 +70,7 @@ export function Header({ view, onViewChange, search, onOpenChannelList }: Props)
         >
           <YouTubeIcon className="size-4" />
         </button>
+        <SiteAbout />
       </div>
 
       {search.open && <SearchBar {...search} />}
@@ -92,6 +93,30 @@ function ThemeToggle() {
     >
       <Icon className="size-4" aria-hidden />
     </button>
+  );
+}
+
+/**
+ * サイトの説明を開閉するボタン。閉じていても説明文が HTML に残るよう、details で作る(検索エンジンに、
+ * サイトの内容を文章で伝えるため)。説明文は、ヘッダーの中身の幅を基準にボタンの下へ重ねて出す(レイアウトは動かさない)。
+ * アイコンは MingCute Icons の information_line(Apache License 2.0)の形を使い、色は currentColor
+ */
+function SiteAbout() {
+  return (
+    <details className="group shrink-0">
+      <summary
+        aria-label="このサイトについて"
+        title="このサイトについて"
+        className="grid size-8 cursor-pointer list-none place-items-center rounded-full border border-line bg-surface/80 text-muted transition group-open:bg-ink group-open:text-canvas hover:text-ink group-open:hover:text-canvas sm:size-9 [&::-webkit-details-marker]:hidden"
+      >
+        <svg viewBox="0 0 24 24" fill="currentColor" className="size-4" aria-hidden>
+          <path d="M12 2c5.523 0 10 4.477 10 10s-4.477 10-10 10S2 17.523 2 12 6.477 2 12 2m0 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16m-.01 6c.558 0 1.01.452 1.01 1.01v5.124A1 1 0 0 1 12.5 18h-.49A1.01 1.01 0 0 1 11 16.99V12a1 1 0 1 1 0-2zM12 7a1 1 0 1 1 0 2 1 1 0 0 1 0-2" />
+        </svg>
+      </summary>
+      <p className="absolute top-full right-4 left-4 mt-2 rounded-2xl border border-line bg-surface p-4 text-xs leading-relaxed text-ink shadow-xl sm:right-6 sm:left-auto sm:w-96">
+        VTuber事務所「PROJECT NEBULA（ぷろねぶ）」所属タレント（桃瀬にな・碓氷ゆら・鈴莉れん・菜鳥ひなた・紫雨るか）のYouTubeチャンネルで公開されている動画・ショート・ライブ配信およびTwitchで公開されている配信・クリップをカレンダーで表示するWebアプリです。
+      </p>
+    </details>
   );
 }
 
