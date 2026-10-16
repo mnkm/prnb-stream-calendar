@@ -131,7 +131,11 @@ export function pickSetlistComment<T extends { text: string; authorChannelId: st
 const toSeconds = (h: string, m: string, s?: string) =>
   s === undefined ? Number(h) * 60 + Number(m) : Number(h) * 3600 + Number(m) * 60 + Number(s);
 
-const knownArtist = (title: string) => KNOWN_ARTISTS[title.toLowerCase()] ?? null;
+/** 対応表そのものに書いた曲だけを見る(「constructor」「__proto__」のような曲名で、Object から受け継いだものを返さない) */
+const knownArtist = (title: string) => {
+  const key = title.toLowerCase();
+  return Object.hasOwn(KNOWN_ARTISTS, key) ? KNOWN_ARTISTS[key] : null;
+};
 
 /** 曲名とアーティストに分ける。「3/30」「12／28」のように数字にはさまれた区切りは日付なので使わない */
 function splitTitleArtist(text: string, separators: RegExp[]) {
