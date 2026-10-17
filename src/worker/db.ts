@@ -560,26 +560,36 @@ export function saveSetlistSongsStmt(db: D1Database, videoId: string, songs: Mat
 }
 
 /**
- * セトリを確認する歌枠。まだ確認していないもの、または次に確認する日時を過ぎたものを、新しい順に。
- * セトリが見つかったあとも、次に確認する日時があるあいだは確認し直す(より良いコメントに差し替えるため)
+ * セトリを確認する配信。まだ確認していないもの、または次に確認する日時を過ぎたものを、歌枠を先に、新しい順に。
+ * セトリが見つかったあとも、次に確認する日時があるあいだは確認し直す(より良いコメントに差し替えるため)。
+ * タイトルに「歌枠」が無い配信(お知らせや雑談のあとに歌った配信など)は、終了が recentSince 以降のものだけ
+ * (過去の配信をさかのぼって確認しない)。確認の途中のもの(次に確認する日時があるもの)は続ける。
+ * 最初の確認は、歌枠は notBefore、それ以外は otherNotBefore より前に終わったもの
  */
-export async function findSetlistTargets(db: D1Database, now: string, notBefore: string, limit: number) {
+export async function findSetlistTargets(
+  db: D1Database,
+  q: { now: string; notBefore: string; otherNotBefore: string; recentSince: string; limit: number },
+) {
   const { results } = await db
     .prepare(
-      `SELECT v.id, v.channel_id, v.ended_at, s.text IS NOT NULL AS has_setlist,
+      `SELECT v.id, v.channel_id, v.ended_at, v.title LIKE '%歌枠%' AS is_utawaku, s.text IS NOT NULL AS has_setlist,
               s.comment_id AS saved_comment_id, length(s.text) AS saved_chars
          FROM videos v LEFT JOIN setlists s ON s.video_id = v.id
         WHERE v.platform = 'youtube' AND v.type = 'live' AND v.live_status = 'ended' AND v.members_only = 0
-          AND v.title LIKE '%歌枠%' AND v.ended_at IS NOT NULL AND v.ended_at <= ? AND v.unavailable_at IS NULL
-          AND (s.video_id IS NULL OR s.next_check_at <= ?)
-        ORDER BY v.ended_at DESC
-        LIMIT ?`,
+          AND v.ended_at IS NOT NULL AND v.unavailable_at IS NULL
+          AND (v.title LIKE '%歌枠%' OR v.ended_at >= ?1 OR s.next_check_at IS NOT NULL)
+          AND ((s.video_id IS NULL AND v.ended_at <= CASE WHEN v.title LIKE '%歌枠%' THEN ?2 ELSE ?3 END)
+               OR s.next_check_at <= ?4)
+        ORDER BY is_utawaku DESC, v.ended_at DESC
+        LIMIT ?5`,
     )
-    .bind(notBefore, now, limit)
+    .bind(q.recentSince, q.notBefore, q.otherNotBefore, q.now, q.limit)
     .all<{
       id: string;
       channel_id: string;
       ended_at: string;
+      /** タイトルに「歌枠」があるか */
+      is_utawaku: number;
       /** すでにセトリが保存されているか。保存されていれば、そのコメントの ID と、本文の文字数(コードポイントの数) */
       has_setlist: number;
       saved_comment_id: string | null;
@@ -633,6 +643,8 @@ export interface SetlistToAudit {
   text: string | null;
   checked_at: string;
   duration_sec: number | null;
+  /** タイトルに「歌枠」があるか */
+  is_utawaku: number;
 }
 
 /**
@@ -642,7 +654,7 @@ export interface SetlistToAudit {
 export async function findSetlistsToAudit(db: D1Database, limit: number) {
   const { results } = await db
     .prepare(
-      `SELECT s.video_id, s.comment_id, s.text, s.checked_at, v.duration_sec
+      `SELECT s.video_id, s.comment_id, s.text, s.checked_at, v.duration_sec, v.title LIKE '%歌枠%' AS is_utawaku
          FROM setlists s JOIN videos v ON v.id = s.video_id
         WHERE (s.audited_at IS NULL OR s.audited_at < s.checked_at)
           AND (s.text IS NOT NULL OR s.next_check_at IS NULL)

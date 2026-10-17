@@ -3,6 +3,7 @@ import {
   SETLIST_PARSER_VERSION,
   mergeSetlistReplies,
   parseSetlist,
+  pickMarkedSetlistComment,
   pickSetlistComment,
 } from '../shared/setlist';
 import { type SetlistProblem, auditSetlist, problemSignature } from '../shared/setlist-audit';
@@ -119,7 +120,7 @@ const PAGE_REQUESTS = 3;
 const BACKFILL_PAGES_PER_RUN = 8;
 /** 1 回の実行で search_title を埋める件数 */
 const SEARCH_TITLE_FILL_PER_RUN = 1000;
-/** 1 回の実行でセトリを確認する歌枠の数 */
+/** 1 回の実行でセトリを確認する配信の数 */
 const SETLIST_CHECKS_PER_RUN = 10;
 /**
  * セトリを確認する時刻(配信終了からの時間)。セトリのコメントは終了後しばらくして書かれることが多い。
@@ -128,6 +129,11 @@ const SETLIST_CHECKS_PER_RUN = 10;
  * 早い時刻の確認では、書きかけのセトリや時刻つきの感想が先に保存されることがある(あとの確認で置き換わる)
  */
 const SETLIST_CHECK_HOURS = [0.25, 0.5, 1, 6, 24, 72, 168];
+/**
+ * タイトルに「歌枠」が無い配信を確認する時刻。歌った配信は一部なので、確認の回数を減らす
+ * (歌のあとにも雑談が続くことが多く、終了直後にセトリが書かれていることは少ない)。最後の時刻は歌枠と同じにする
+ */
+const SETLIST_CHECK_HOURS_OTHER = [1, 6, 24, 72, 168];
 /** 関連性順で確認するコメントの数(固定コメントは先頭に来るが、固定されていないセトリも拾うため) */
 const SETLIST_COMMENTS = 20;
 /** セトリの続きを探す返信の数(古い順。comments.list で 1 回に取れる上限) */
@@ -807,29 +813,43 @@ async function twitchArchiveStmts(
 }
 
 /**
- * 歌枠のセトリを確認する。関連性順の上位コメントから、タイムスタンプを多く含むものをセトリとして保存する
+ * 配信のセトリを確認する。関連性順の上位コメントから、タイムスタンプを多く含むものをセトリとして保存する
  * (選び方は pickSetlistComment)。同じ書き手が返信で続きを書いていれば、つなげて保存する(mergeSetlistReplies)。
- * 配信終了の 15 分後・30 分後、1・6・24 時間後、3・7 日後に確認し(SETLIST_CHECK_HOURS)、見つかったあとも 7 日後までは
- * 確認し直して、より良いコメントがあれば差し替える。7 日を過ぎたら確認をやめる(見つかっていなければあきらめる)
+ * 歌枠は、配信終了の 15 分後・30 分後、1・6・24 時間後、3・7 日後に確認し(SETLIST_CHECK_HOURS)、見つかったあとも 7 日後までは
+ * 確認し直して、より良いコメントがあれば差し替える。7 日を過ぎたら確認をやめる(見つかっていなければあきらめる)。
+ * タイトルに「歌枠」が無い配信は、終了から 7 日以内のものだけを、回数を減らして確認し(SETLIST_CHECK_HOURS_OTHER)、
+ * セトリらしい書き方で曲として読めるコメントだけを保存する(pickMarkedSetlistComment)
  */
 async function checkSetlists(db: D1Database, yt: YouTubeClient, budget: RequestBudget) {
   // 対象の読み取り 1 回 + 書き込み 1 回 + 1 本以上の確認が入らなければ、次回に回す
   if (budget.remaining < 4) return;
   const now = new Date();
-  const notBefore = toIsoSeconds(new Date(now.getTime() - SETLIST_CHECK_HOURS[0] * 3600_000));
-  const targets = await findSetlistTargets(db, toIsoSeconds(now), notBefore, SETLIST_CHECKS_PER_RUN);
+  const hoursAgo = (hours: number) => toIsoSeconds(new Date(now.getTime() - hours * 3600_000));
+  const targets = await findSetlistTargets(db, {
+    now: toIsoSeconds(now),
+    notBefore: hoursAgo(SETLIST_CHECK_HOURS[0]),
+    otherNotBefore: hoursAgo(SETLIST_CHECK_HOURS_OTHER[0]),
+    recentSince: hoursAgo(SETLIST_CHECK_HOURS_OTHER[SETLIST_CHECK_HOURS_OTHER.length - 1]),
+    limit: SETLIST_CHECKS_PER_RUN,
+  });
 
   const stmts: D1PreparedStatement[] = [];
   for (const target of targets) {
     if (budget.remaining <= 1) break; // 最後の書き込みの分を残す
+    const checkHours = target.is_utawaku ? SETLIST_CHECK_HOURS : SETLIST_CHECK_HOURS_OTHER;
     let comments: YtComment[] | null;
     let found: YtComment | null = null;
     try {
       comments = await yt.getTopComments(target.id, SETLIST_COMMENTS);
-      const picked = comments ? pickSetlistComment(comments, target.channel_id) : null;
-      // 曲として読めると確かめられなかった候補では、すでに保存してあるセトリを置き換えない
-      // (時刻つきの感想が上位に並んだだけで、前に取れた正しいセトリが消えないように)
-      found = picked && (picked.verified || !target.has_setlist) ? picked.comment : null;
+      if (comments && target.is_utawaku) {
+        const picked = pickSetlistComment(comments, target.channel_id);
+        // 曲として読めると確かめられなかった候補では、すでに保存してあるセトリを置き換えない
+        // (時刻つきの感想が上位に並んだだけで、前に取れた正しいセトリが消えないように)
+        found = picked && (picked.verified || !target.has_setlist) ? picked.comment : null;
+      } else if (comments) {
+        // 歌枠でない配信は、雑談の目次やゲームの章立てを取らないよう、セトリらしい書き方のものだけ
+        found = pickMarkedSetlistComment(comments, target.channel_id);
+      }
       if (found && found.replyCount > 0) {
         // セトリが返信に分けて続けられていれば、つなげる
         if (budget.remaining <= 1) break; // 最後の書き込みの分を残す(この歌枠は次回に確認する)
@@ -855,7 +875,7 @@ async function checkSetlists(db: D1Database, yt: YouTubeClient, budget: RequestB
           videoId: target.id,
           comment: null,
           checkedAt: toIsoSeconds(now),
-          nextCheckAt: nextSetlistCheck(target.ended_at, now),
+          nextCheckAt: nextSetlistCheck(target.ended_at, now, checkHours),
         }),
       );
       continue;
@@ -866,7 +886,7 @@ async function checkSetlists(db: D1Database, yt: YouTubeClient, budget: RequestB
         comment: found,
         checkedAt: toIsoSeconds(now),
         // コメントが無効な配信は、もう確認しない
-        nextCheckAt: comments === null ? null : nextSetlistCheck(target.ended_at, now),
+        nextCheckAt: comments === null ? null : nextSetlistCheck(target.ended_at, now, checkHours),
       }),
     );
   }
@@ -913,9 +933,9 @@ function isVideoSpecificError(err: unknown) {
 }
 
 /** 次にセトリを確認する日時。配信終了から 7 日を過ぎていれば null(確認をやめる) */
-function nextSetlistCheck(endedAt: string, now: Date): string | null {
+function nextSetlistCheck(endedAt: string, now: Date, checkHours: number[]): string | null {
   const ended = Date.parse(endedAt);
-  const next = SETLIST_CHECK_HOURS.map((h) => ended + h * 3600_000).find((t) => t > now.getTime());
+  const next = checkHours.map((h) => ended + h * 3600_000).find((t) => t > now.getTime());
   return next === undefined ? null : toIsoSeconds(new Date(next));
 }
 
@@ -949,7 +969,9 @@ async function auditSetlists(db: D1Database, budget: RequestBudget) {
   const stmts = rows.flatMap((row) => {
     let problems: SetlistProblem[];
     try {
-      problems = auditSetlist(row.text, row.duration_sec);
+      // タイトルに「歌枠」が無い配信は、歌っていないことの方が多いので、見つからなかったことは問題にしない
+      // (問題なしとして点検済みにする。点検しないままにすると、毎回の点検で読み直すことになる)
+      problems = row.text === null && !row.is_utawaku ? [] : auditSetlist(row.text, row.duration_sec);
     } catch (err) {
       // 点検できないセトリが 1 本あっても、同じ行で毎回止まらないよう、問題として残して先へ進む
       console.error(`auditSetlist failed for ${row.video_id}`, err);
