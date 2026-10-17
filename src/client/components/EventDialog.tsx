@@ -72,13 +72,12 @@ export function EventDialog({ state, channelMap, showChannelColor, onChange, onO
   );
 }
 
-/** セトリを表示する配信: YouTube の配信が終わった歌枠(メンバー限定はコメントを読めないので除く) */
+/**
+ * セトリを探す配信: YouTube の配信が終わったもの(メンバー限定はコメントを読めないので除く)。
+ * タイトルに「歌枠」が無くても、歌った配信ではセトリが保存されていることがある。見つかっていなければ何も表示しない
+ */
 const hasSetlist = (event: CalendarEvent) =>
-  event.platform === 'youtube' &&
-  event.type === 'live' &&
-  event.liveStatus === 'ended' &&
-  !event.membersOnly &&
-  event.title.includes('歌枠');
+  event.platform === 'youtube' && event.type === 'live' && event.liveStatus === 'ended' && !event.membersOnly;
 
 /**
  * 埋め込みプレーヤーの URL。再生できないときは null。

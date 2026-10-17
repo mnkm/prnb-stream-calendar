@@ -128,6 +128,49 @@ export function pickSetlistComment<T extends { text: string; authorChannelId: st
   return candidates.length > 0 ? { comment: candidates[0], verified: false } : null;
 }
 
+/** 歌の印(🎵・♪ など、「(歌)」) */
+const SINGING_MARK = /[🎵🎶♪♫]|[(（]歌[)）]/u;
+
+/**
+ * セトリらしい書き方をしているか。「セトリ」の見出しがある、または曲番号(【01】・01.・M01・No.01)のある時刻の行と、
+ * 歌の印のある行が、合わせて SETLIST_MIN_SONGS 行以上ある。
+ * タイトルに「歌枠」が無い配信のコメントを選ぶときに使う。曲として読めるか(parseSetlist)だけでは、
+ * ゲームの章立て(「Chapter1 - 森の村」)や雑談の目次(「近況 / 引っ越しの話」)もセトリとして読めてしまうため
+ */
+export function hasSetlistMarks(text: string): boolean {
+  let marked = 0;
+  for (const line of splitLines(text.slice(0, SETLIST_MAX_CHARS)).slice(0, SETLIST_MAX_LINES)) {
+    if (line.length > MAX_LINE_CHARS) continue;
+    if (SETLIST_HEADING.test(line)) return true;
+    // 歌の印は、時刻と別の行に書かれることもある(「▶05:52〜10:48」の次の行に「🎵1.ミラクル /miwa」)
+    if (SINGING_MARK.test(line)) {
+      if (++marked >= SETLIST_MIN_SONGS) return true;
+      continue;
+    }
+    if (!TIME_ONCE.test(line)) continue;
+    // 曲番号は、行頭(時刻より前。「M01 00:08:23 …」)か、時刻を除いた残りの先頭(「0:20:33 【01】…」)にある。
+    // 時刻で始まる行の行頭は見ない(「00:09:46」の「00:」を番号と取り違える)
+    const head = line.replace(LEADING, '');
+    const rest = line.replace(TIME_GLOBAL, ' ').replace(LEADING, '');
+    const numbered = (TIME_ONCE.exec(head)?.index !== 0 && NUMBER.test(head)) || NUMBER.test(rest);
+    if (numbered && ++marked >= SETLIST_MIN_SONGS) return true;
+  }
+  return false;
+}
+
+/**
+ * タイトルに「歌枠」が無い配信(お知らせ・雑談のあとに歌った配信など)で、セトリとして使うコメントを選ぶ。
+ * セトリらしい書き方のコメント(hasSetlistMarks)だけを候補にして pickSetlistComment で選び、曲として読めると
+ * 確かめられたもの(verified)だけを返す。歌の配信かどうかがタイトルから分からないので、確かめられなかった候補は使わない
+ */
+export function pickMarkedSetlistComment<T extends { text: string; authorChannelId: string | null; likeCount: number }>(
+  comments: T[],
+  channelId: string,
+): T | null {
+  const picked = pickSetlistComment(comments.filter((c) => hasSetlistMarks(c.text)), channelId);
+  return picked?.verified ? picked.comment : null;
+}
+
 const toSeconds = (h: string, m: string, s?: string) =>
   s === undefined ? Number(h) * 60 + Number(m) : Number(h) * 3600 + Number(m) * 60 + Number(s);
 
