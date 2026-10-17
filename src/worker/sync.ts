@@ -12,7 +12,7 @@ import {
   type ChannelProfile,
   type ChannelRow,
   type TwitchArchiveRow,
-  type VideoRow,
+  type VideoWriteRow,
   availabilityStmts,
   clearExpiredTwitchArchivesStmt,
   clearTwitchToken,
@@ -553,7 +553,7 @@ async function scanMembers(
   return upserted;
 }
 
-function toVideoRow(v: YtVideo, isShort: boolean, inVideosTab: boolean): VideoRow {
+function toVideoRow(v: YtVideo, isShort: boolean, inVideosTab: boolean): VideoWriteRow {
   const live = v.liveStreamingDetails;
   const broadcast = v.snippet.liveBroadcastContent;
   const liveStatus: LiveStatus | null = live ? (broadcast === 'none' ? 'ended' : broadcast) : null;
@@ -561,10 +561,13 @@ function toVideoRow(v: YtVideo, isShort: boolean, inVideosTab: boolean): VideoRo
   const thumbs = v.snippet.thumbnails;
   const duration = parseDuration(v.contentDetails?.duration);
   // プレミア公開も liveStreamingDetails を持つ。公開前・公開中は動画がアップロード済みなので長さがあり、
-  // 長さ 0 のライブ配信と区別できる。公開後は UULF に含まれるかどうかで判定する
-  const isPremiere = !!live && (inVideosTab || (broadcast !== 'none' && !!duration));
+  // 長さ 0 のライブ配信と区別できる。公開後は UULF に含まれるかどうかで判定する。
+  // ライブ配信も、終わった直後は liveBroadcastContent が 'live' のまま長さ(終了 − 開始)が入ることがあるので、
+  // 終了時刻(actualEndTime)が入ったものは長さでは判定しない
+  const isPremiere = !!live && (inVideosTab || (broadcast !== 'none' && !!duration && !live.actualEndTime));
 
   return {
+    listed_premiere: !!live && inVideosTab,
     id: v.id,
     channel_id: v.snippet.channelId,
     type: live && !isPremiere ? 'live' : isShort ? 'short' : 'video',

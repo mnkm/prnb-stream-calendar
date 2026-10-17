@@ -66,6 +66,12 @@ export interface VideoRow {
   published_at: string;
 }
 
+/** 書き込み用の行。listed_premiere は列ではなく、upsert で種別を決めるのに使う */
+export interface VideoWriteRow extends VideoRow {
+  /** UULF / UUMF に含まれることを確かめたプレミア公開 */
+  listed_premiere: boolean;
+}
+
 /** DB から読み出した行。members_only は markMembersOnly でだけ立てるので、書き込み用の VideoRow には含めない */
 interface StoredVideoRow extends VideoRow {
   members_only: number;
@@ -322,7 +328,7 @@ export function availabilityStmts(
   return [found(r.publicIds, 0), found(r.unlistedIds, 1), missing];
 }
 
-export function upsertVideoStmts(db: D1Database, rows: VideoRow[], now: string): D1PreparedStatement[] {
+export function upsertVideoStmts(db: D1Database, rows: VideoWriteRow[], now: string): D1PreparedStatement[] {
   if (rows.length === 0) return [];
   const stmt = db.prepare(
     `INSERT INTO videos (id, channel_id, type, live_status, title, search_title, thumbnail_url, duration_sec,
@@ -330,10 +336,14 @@ export function upsertVideoStmts(db: D1Database, rows: VideoRow[], now: string):
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (id) DO UPDATE SET
        -- UUSH で判定済みのショートは、通常の再取得で 'video' に戻さない。
-       -- プレミア公開(type = 'video' かつ live_status あり)も、公開後の再取得で 'live' に戻さない
+       -- プレミア公開(type = 'video' かつ live_status あり)も、公開後の再取得で 'live' に戻さない。
+       -- ライブとして登録済みのものは、長さだけでプレミア公開に変えない(配信の終わった直後に長さが入ることがある)。
+       -- UULF / UUMF に含まれると分かったとき(?13 = 1)だけ動画にする
        type          = CASE
                          WHEN videos.type = 'short' AND excluded.type = 'video' THEN 'short'
                          WHEN videos.type = 'video' AND videos.live_status IS NOT NULL AND excluded.type = 'live' THEN 'video'
+                         WHEN videos.type = 'live' AND excluded.type = 'video' AND excluded.live_status IS NOT NULL
+                              AND ?13 = 0 THEN 'live'
                          ELSE excluded.type
                        END,
        live_status   = excluded.live_status,
@@ -349,7 +359,7 @@ export function upsertVideoStmts(db: D1Database, rows: VideoRow[], now: string):
   return rows.map((r) =>
     stmt.bind(
       r.id, r.channel_id, r.type, r.live_status, r.title, normalizeForSearch(r.title), r.thumbnail_url,
-      r.duration_sec, r.event_at, r.ended_at, r.published_at, now,
+      r.duration_sec, r.event_at, r.ended_at, r.published_at, now, r.listed_premiere ? 1 : 0,
     ),
   );
 }
