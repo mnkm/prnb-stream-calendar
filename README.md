@@ -75,6 +75,7 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 | `GET /api/channels` | 有効なチャンネルの一覧(名前・アイコン・色・説明・登録者数、Twitch のログイン名とフォロワー数、楽曲リストの talent の値など) |
 | `GET /api/events?from=&to=&channels=&types=` | 期間内の予定(最大 100 日分)。カレンダー表示に使う。YouTube と Twitch の両方を返す |
 | `GET /api/search?q=&types=&channels=&twitch=&cursor=` | キーワード検索(タイトルとセトリ)。50 件ずつ新しい順に返す(後述)。語は 5 個まで。`twitch=0` で Twitch の配信を除く。セトリで当たった予定には、当たった曲(`matchedSongs`)が付く |
+| `GET /api/videos?channels=&types=&members=&before=&limit=&cursor=` | 動画の一覧(後述)。キーワードを使わずに、全期間を新しい順にたどる。ファンサイトのアーカイブなど、カレンダーの外から使うためのもの |
 | `GET /api/setlist/:id` | 歌枠のセトリ(コメントの原文と書き手)。まだ見つかっていなければ 404 |
 | `GET /api/channels/:id/playlists` | チャンネルの再生リスト(おすすめ系が先頭、残りは最後に動画が追加された順) |
 | `GET /api/playlists/:id` | 再生リストの中身(このカレンダーに登録済みの動画だけ、再生リストの並び順) |
@@ -83,7 +84,18 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 | `GET /api/channels/:id/clips?sort=&offset=` | チャンネルの Twitch のクリップ。`sort` は `popular`(再生数の多い順)か `new`(新しい順)。30 件ずつ返す。`offset` は 0〜3000 の整数(それ以外は 400)で、3000 件目より先は返さない |
 | `POST /api/admin/sync` | 手動同期。`Authorization: Bearer <ADMIN_TOKEN>` が必要 |
 
-`GET` の応答には、ブラウザ向けのキャッシュの指定を付けています(予定は 30 秒、それ以外は 1 分)。同期の結果が画面に出るまで、その分だけ遅れることがあります。検索だけは、同じ期間 Cloudflare 側のキャッシュ(Cache API)にも置き、同じ検索の繰り返しをデータベースを読まずに返します(検索はデータベースを全件読むため)。
+`GET` の応答には、ブラウザ向けのキャッシュの指定を付けています(予定は 30 秒、それ以外は 1 分)。同期の結果が画面に出るまで、その分だけ遅れることがあります。検索と動画の一覧は、同じ期間 Cloudflare 側のキャッシュ(Cache API)にも置き、同じ問い合わせの繰り返しをデータベースを読まずに返します(検索はデータベースを全件読むため。動画の一覧は、終わった配信と公開済みの動画だけなので、少し古くても困らないため)。
+
+### 動画の一覧(`/api/videos`)
+
+YouTube の、配信が終わったものと公開済みのものを、新しい順に返します(`src/worker/db.ts` の `listVideos`)。
+
+- **含めないもの**: 配信予定・配信中、公開前のプレミア公開(`live_status` が `upcoming` / `live`)、再生できなくなったもの(`unavailable_at` があるもの)、限定公開、Twitch の配信。YouTube で今見られるものだけにそろえるためです。
+- **絞り込み**: `channels`・`types` は `/api/events` と同じです。`members` は `only`(メンバー限定だけ)/ `exclude`(メンバー限定を除く)/ 指定なし(すべて)。`before` を付けると、その日時より前のものから返します(年月を選んで読み始めるため。丸めません)。
+- **ページ**: `limit`(1〜50、既定 50)件ずつ返し、続きは `cursor` に `nextCursor` を渡して取ります(形と並び順は `/api/search` と同じ)。
+- **件数**: 最初のページ(`cursor` が無いとき)だけ、`counts` に種別ごとの件数(`live` / `video` / `short`)とメンバー限定の件数(`members`)が入ります。数えるのは、種別・メンバー限定・`before` の絞り込みの前です。
+- 正しくない値(知らない種別、範囲外の `limit`、形の違う `cursor` や `before`)はエラーにせず、指定が無いものとして扱います。
+- 1 つのチャンネルで絞り込むときは、`idx_videos_youtube_channel`(`channel_id, event_at`、YouTube の行だけ)を使います。
 
 公開 API には、次の制限があります(`src/worker/index.ts`、回数は `wrangler.jsonc` の `ratelimits`)。
 
@@ -516,6 +528,7 @@ npx wrangler d1 execute prnb-youtube-calendar --remote \
 | `0015_setlist_search.sql` | セトリから読み取った曲(検索用) |
 | `0016_songlist.sql` | 楽曲リストのサイトで使う talent パラメータの値 |
 | `0017_recheck_split_setlists.sql` | 返信に分けて書かれていたセトリを、つなげて取り直す(該当の歌枠を、もう一度確認の対象にする) |
+| `0018_videos_youtube_channel.sql` | 動画の一覧(`/api/videos`)用のインデックス(チャンネルごとの YouTube の動画を新しい順にたどる) |
 
 ### チャンネルの追加
 
