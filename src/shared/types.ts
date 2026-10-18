@@ -108,6 +108,26 @@ export interface SearchPage {
   counts?: Record<EventFilter, number>;
 }
 
+/** 動画の一覧での、メンバー限定の絞り込み。all はすべて、only はメンバー限定だけ、exclude はメンバー限定を除く */
+export type MembersFilter = 'all' | 'only' | 'exclude';
+
+/** 動画の一覧の件数(種別ごとと、メンバー限定)。種別・メンバー限定・before・cursor の絞り込み前に数える */
+export interface VideoListCounts {
+  live: number;
+  video: number;
+  short: number;
+  members: number;
+}
+
+/** 動画の一覧の 1 ページ分(新しい順)。YouTube の、配信が終わったものと公開済みのものだけで、再生できないもの・限定公開は含まない */
+export interface VideoListPage {
+  events: CalendarEvent[];
+  /** 次のページを取るときに cursor に渡す値。最後のページなら null */
+  nextCursor: string | null;
+  /** 最初のページ(cursor が無いとき)だけに入る */
+  counts?: VideoListCounts;
+}
+
 /** 歌枠のセトリ(コメントの原文)。読み取りは src/shared/setlist.ts の parseSetlist で行う */
 export interface Setlist {
   /** コメントを書いた人の表示名(@ から始まるハンドル) */

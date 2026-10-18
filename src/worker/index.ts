@@ -5,6 +5,7 @@ import { type ClipSort, VIDEO_TYPES, type VideoType } from '../shared/types';
 import {
   type EventQuery,
   type SearchQuery,
+  type VideoListQuery,
   getPlaylistDetail,
   getSetlist,
   listChannelClips,
@@ -12,6 +13,7 @@ import {
   listEventClips,
   listEnabledChannels,
   listVideoPlaylists,
+  listVideos,
   queryEvents,
   searchEvents,
   toChannel,
@@ -33,6 +35,8 @@ const MAX_CHANNEL_FILTER = 20;
 /** 絞り込みに渡せるチャンネル ID の長さの上限(YouTube のチャンネル ID は 24 文字) */
 const MAX_ID_LENGTH = 64;
 const SEARCH_PAGE_SIZE = 50;
+/** 動画の一覧の 1 ページの件数(既定で、limit の上限でもある) */
+const VIDEO_LIST_PAGE_SIZE = 50;
 const MAX_SEARCH_TERMS = 5;
 const MAX_SEARCH_TERM_LENGTH = 50;
 /** 検索語に分ける前の長さの上限(MAX_SEARCH_TERMS 個の語と、あいだの空白が入る長さ) */
@@ -83,8 +87,9 @@ const rateLimit = (pick: (env: Bindings) => RateLimit | undefined): MiddlewareHa
  * (順番を変える・ヘッダーを足すなど、内容が同じまま書き方だけを変えても、キャッシュを避けられない)。
  * 内容そのものを変えればキーは変わるので、キャッシュに無い問い合わせの回数はレート制限で抑える。
  *
- * 使うのは検索だけ。検索はデータベースを全件読むので、同じ検索の繰り返しを安く防げる。検索結果が少し古くても、
- * 同期の結果が画面に出る速さには響きにくい。予定やセトリなどは、反映が遅れないよう、ここには置かない。
+ * 使うのは検索と動画の一覧だけ。検索はデータベースを全件読むので、同じ検索の繰り返しを安く防げる。検索結果が少し古くても、
+ * 同期の結果が画面に出る速さには響きにくい。動画の一覧は、終わった配信と公開済みの動画だけを返すので、少し古くても困らない。
+ * 予定やセトリなどは、反映が遅れないよう、ここには置かない。
  *
  * 応答の Cache-Control は、ルートではなくここで付ける(キャッシュに置く期間と、ブラウザが持つ期間を同じにする)。
  * キャッシュから返すときにも付け直す。独自ドメイン(mnkm.page)では、キャッシュから出てきた応答の Cache-Control が
@@ -190,6 +195,40 @@ app.get(
     if (!query) return c.json({ error: 'q is required' }, 400);
     // Cache-Control は cached が付ける
     return c.json(await searchEvents(c.env.DB, query));
+  },
+);
+
+/**
+ * /videos の問い合わせ。正しくない値は既定の値にそろえる(エラーにはしない。書き方だけが違う問い合わせを同じキャッシュにまとめる)。
+ * before は丸めない(/events のように 15 分単位に広げると、「その日時より前」より新しいものまで返ってしまう)
+ */
+function parseVideoListQuery(c: Context): VideoListQuery {
+  const members = c.req.query('members');
+  const limit = Number(c.req.query('limit'));
+  const before = parseDate(c.req.query('before'));
+  const cursor = c.req.query('cursor');
+  return {
+    channelIds: parseIdList(c.req.query('channels')),
+    types: parseTypes(c.req.query('types')),
+    members: members === 'only' || members === 'exclude' ? members : 'all',
+    before: before ? toIsoSeconds(before) : null,
+    cursor: cursor && CURSOR_FORMAT.test(cursor) ? cursor : null,
+    limit: Number.isInteger(limit) && limit >= 1 && limit <= VIDEO_LIST_PAGE_SIZE ? limit : VIDEO_LIST_PAGE_SIZE,
+  };
+}
+
+/**
+ * 動画の一覧。YouTube の、配信が終わったものと公開済みのものを、期間に関係なく新しい順に返す(キーワードは要らない)。
+ * 配信予定・配信中と、再生できなくなったもの・限定公開は含めない。
+ * channels・types で絞り込み、members=only / exclude でメンバー限定だけ / メンバー限定を除く。
+ * before を付けると、その日時より前から返す。limit(1〜50、既定 50)件ずつ返し、続きは cursor に nextCursor を渡して取る
+ */
+app.get(
+  '/videos',
+  cached(60, (c) => JSON.stringify(parseVideoListQuery(c))),
+  async (c) => {
+    // Cache-Control は cached が付ける
+    return c.json(await listVideos(c.env.DB, parseVideoListQuery(c)));
   },
 );
 

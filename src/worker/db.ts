@@ -9,11 +9,14 @@ import type {
   EventFilter,
   LiveStatus,
   MatchedSong,
+  MembersFilter,
   Platform,
   Playlist,
   PlaylistDetail,
   SearchPage,
   Setlist,
+  VideoListCounts,
+  VideoListPage,
   VideoType,
 } from '../shared/types';
 
@@ -516,6 +519,80 @@ export async function searchEvents(db: D1Database, q: SearchQuery): Promise<Sear
     return matchedSongs.length > 0 ? { ...toEvent(row), matchedSongs } : toEvent(row);
   });
   return { events, nextCursor: hasMore ? encodeCursor(rows[rows.length - 1]) : null, counts };
+}
+
+export interface VideoListQuery {
+  channelIds: string[];
+  types: VideoType[];
+  members: MembersFilter;
+  /** この日時より前のものだけを返す(年月を選んで読み始めるため)。無ければ null */
+  before: string | null;
+  /** 前のページの nextCursor。最初のページなら null */
+  cursor: string | null;
+  limit: number;
+}
+
+/**
+ * 動画の一覧を、新しい順に 1 ページ分返す。キーワードを使わずに全期間をたどるためのもの(ファンサイトのアーカイブなど)。
+ * 返すのは YouTube の、配信が終わったものと公開済みのものだけ。配信予定・配信中・公開前のプレミア公開と、
+ * 再生できなくなったもの・限定公開は含めない(YouTube で今見られるものとそろえる)。
+ * 最初のページでは、種別ごとの件数とメンバー限定の件数(種別・メンバー限定・before の絞り込み前)も数える
+ */
+export async function listVideos(db: D1Database, q: VideoListQuery): Promise<VideoListPage> {
+  // platform = 'youtube' はそのまま書く(idx_videos_youtube_channel は、この条件の部分インデックス)
+  const base = [
+    `platform = 'youtube'`,
+    'unavailable_at IS NULL',
+    'unlisted = 0',
+    `(live_status IS NULL OR live_status = 'ended')`,
+  ];
+  const baseParams: string[] = [];
+  if (q.channelIds.length > 0) {
+    base.push(`channel_id IN (${placeholders(q.channelIds.length)})`);
+    baseParams.push(...q.channelIds);
+  }
+
+  const where = [...base];
+  const params: (string | number)[] = [...baseParams];
+  if (q.types.length > 0) {
+    where.push(`type IN (${placeholders(q.types.length)})`);
+    params.push(...q.types);
+  }
+  if (q.members === 'only') where.push('members_only = 1');
+  if (q.members === 'exclude') where.push('members_only = 0');
+  if (q.before) {
+    where.push('event_at < ?');
+    params.push(q.before);
+  }
+  const cursor = q.cursor ? decodeCursor(q.cursor) : null;
+  if (cursor) {
+    where.push('(event_at < ? OR (event_at = ? AND id < ?))');
+    params.push(cursor.eventAt, cursor.eventAt, cursor.id);
+  }
+
+  const pageStmt = db
+    .prepare(`SELECT * FROM videos WHERE ${where.join(' AND ')} ORDER BY event_at DESC, id DESC LIMIT ?`)
+    .bind(...params, q.limit + 1);
+  const countStmt = db
+    .prepare(`SELECT type, COUNT(*) AS n, SUM(members_only) AS m FROM videos WHERE ${base.join(' AND ')} GROUP BY type`)
+    .bind(...baseParams);
+
+  const [page, countRows] = await Promise.all([
+    pageStmt.all<StoredVideoRow>(),
+    q.cursor ? null : countStmt.all<{ type: VideoType; n: number; m: number }>(),
+  ]);
+
+  const rows = page.results.slice(0, q.limit);
+  const hasMore = page.results.length > q.limit;
+  let counts: VideoListCounts | undefined;
+  if (countRows) {
+    counts = { live: 0, video: 0, short: 0, members: 0 };
+    for (const { type, n, m } of countRows.results) {
+      counts[type] = n;
+      counts.members += m;
+    }
+  }
+  return { events: rows.map(toEvent), nextCursor: hasMore ? encodeCursor(rows[rows.length - 1]) : null, counts };
 }
 
 /** 保存してある曲(setlists.songs の JSON)のうち、曲名かアーティストに検索語のどれかを含むもの */
