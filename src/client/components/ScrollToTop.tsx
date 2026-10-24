@@ -24,7 +24,9 @@ export function ScrollToTop() {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 12, scale: 0.9 }}
           transition={{ duration: 0.2 }}
-          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          onClick={() =>
+            window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+          }
           aria-label="ページの先頭へ戻る"
           title="ページの先頭へ戻る"
           // 画面下端に安全領域(iPhone のホームバーなど)があるときは、そのぶん上げる

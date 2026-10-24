@@ -8,7 +8,7 @@ import {
 } from '../shared/setlist';
 import { type SetlistProblem, auditSetlist, problemSignature } from '../shared/setlist-audit';
 import type { LiveStatus } from '../shared/types';
-import { RequestBudget, countD1 } from './budget';
+import { RequestBudget, RequestBudgetExceededError, countD1 } from './budget';
 import {
   type ChannelProfile,
   type ChannelRow,
@@ -46,11 +46,10 @@ import {
   playlistItemsPageStmts,
   readTwitchState,
   saveBackfillProgress,
-  saveMembersScanProgress,
+  saveScanProgress,
   saveSetlistAuditStmts,
   saveSetlistSongsStmt,
   saveSetlistStmt,
-  savePremieresScanProgress,
   saveTwitchClipsBackfillStmt,
   saveTwitchTokenStmt,
   twitchClipCheckStmts,
@@ -64,10 +63,9 @@ import {
   writeBatch,
 } from './db';
 import { buildSetlistAuditIssue, createIssue } from './github';
-import { toIsoSeconds } from './time';
+import { JST_OFFSET_MS, isDue, isoBefore, toIsoSeconds } from './time';
 import { type TwClip, TwitchApiError, TwitchClient } from './twitch';
 import {
-  RequestBudgetExceededError,
   SHORTS_MAX_DURATION_SEC,
   type YtChannel,
   type YtComment,
@@ -235,14 +233,14 @@ export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
     );
   }
 
-  // Twitch にもチャンネルがあるものは、配信中のライブと過去の配信のアーカイブを取り込む(毎回、全チャンネル分)
+  // 2. Twitch にもチャンネルがあるものは、配信中のライブと過去の配信のアーカイブを取り込む(毎回、全チャンネル分)
   try {
     await syncTwitch(db, budget, env, channels);
   } catch (err) {
     console.error('syncTwitch failed', err);
   }
 
-  // 2. 残りの予算で、過去分の取得と一度だけの補正を sort_order の順に進める
+  // 3・4. 残りの予算で、過去分の取得と一度だけの補正を sort_order の順に進める
   for (const channel of channels) {
     const mode = channel.backfill_stage !== 'done' ? 'backfill' : needsScan(channel) ? 'scan' : null;
     if (!mode) continue;
@@ -259,17 +257,17 @@ export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
     );
   }
 
-  // 3. 残りの予算で、セトリの処理をする(通知・確認・曲の読み取り・点検)
+  // 5・6. 残りの予算で、セトリの処理をする(確認・曲の読み取り・点検・通知)
   await runSetlistStages(db, yt, budget, env);
 
-  // 5. 残りの予算で、再生リストの一覧(1 日 1 回)と、本数が変わった再生リストの中身を読む
+  // 7. 残りの予算で、再生リストの一覧(1 日 1 回)と、本数が変わった再生リストの中身を読む
   try {
     await syncPlaylists(db, yt, budget, channels);
   } catch (err) {
     console.error('syncPlaylists failed', err);
   }
 
-  // 6. 残りの予算で、取り込み済みの YouTube の動画が今も再生できるかを、古いものから順に確認する
+  // 8. 残りの予算で、取り込み済みの YouTube の動画が今も再生できるかを、古いものから順に確認する
   try {
     await checkAvailability(db, yt, budget);
   } catch (err) {
@@ -326,12 +324,7 @@ export async function syncLiveStatus(env: SyncEnv): Promise<{ watched: number; u
   const budget = new RequestBudget(LIVE_STATUS_REQUEST_BUDGET);
   const db = countD1(env.DB, budget);
   const now = Date.now();
-  const ids = await findLivesToWatch(
-    db,
-    toIsoSeconds(new Date(now - LIVE_STATUS_PAST_MS)),
-    toIsoSeconds(new Date(now + LIVE_STATUS_AHEAD_MS)),
-    LIVE_STATUS_MAX_VIDEOS,
-  );
+  const ids = await findLivesToWatch(db, isoBefore(now, LIVE_STATUS_PAST_MS), isoBefore(now, -LIVE_STATUS_AHEAD_MS), LIVE_STATUS_MAX_VIDEOS);
   if (ids.length === 0) return { watched: 0, updated: 0 };
   const videos = await new YouTubeClient(env.YOUTUBE_API_KEY, budget).getVideos(ids);
   // 配信はショートではない。プレミア公開かどうかは、公開中は長さから決まり、公開後は保存済みの種別が保たれる
@@ -368,8 +361,7 @@ async function runSafely(
 /** チャンネルのプロフィールを 1 日 1 回取り直す(1 unit)。名前とアイコンがまだ無いときはすぐ取る */
 async function ensureChannelProfile(db: D1Database, yt: YouTubeClient, channel: ChannelRow) {
   const hasBasics = !!(channel.title && channel.icon_url);
-  const updatedAt = channel.profile_updated_at ? Date.parse(channel.profile_updated_at) : 0;
-  if (hasBasics && Date.now() - updatedAt < PROFILE_REFRESH_MS) return;
+  if (hasBasics && !isDue(channel.profile_updated_at, PROFILE_REFRESH_MS)) return;
   try {
     const info = await yt.getChannel(channel.id);
     if (!info) throw new Error(`channel not found: ${channel.id}`);
@@ -460,7 +452,7 @@ async function incrementalSync(
   // 種別の一覧(UUSH = ショート、UULF = 動画タブ)は、新しい動画があったとき、公開されたばかりの動画があるあいだ、
   // 1 時間に 1 回の確かめ直しの回、にだけ取る(毎回取ると、チャンネルごとに 2 unit ずつ使う)。
   // undefined は「今回は取りに行かなかった」、null は「取りに行ったが、一覧が無かった」
-  const recentUpload = await hasRecentUpload(db, channel.id, toIsoSeconds(new Date(Date.now() - RECENT_UPLOAD_MS)));
+  const recentUpload = await hasRecentUpload(db, channel.id, isoBefore(Date.now(), RECENT_UPLOAD_MS));
   const checkTypes = typeCheckRun || newIds.length > 0 || recentUpload;
   const shortsPage = checkTypes ? await yt.listPlaylistPage(shortsPlaylistId(channel.id)) : undefined;
   const shortIds = new Set(shortsPage?.ids ?? []);
@@ -526,7 +518,7 @@ async function scanPremieres(db: D1Database, yt: YouTubeClient, budget: RequestB
     pageToken = page?.nextPageToken;
     if (!pageToken) break;
   }
-  await savePremieresScanProgress(db, channel.id, pageToken ?? null, nowIso());
+  await saveScanProgress(db, channel.id, 'premieres', pageToken ?? null, nowIso());
 }
 
 /**
@@ -555,7 +547,7 @@ async function scanMembers(
     pageToken = page?.nextPageToken;
     if (!pageToken) break;
   }
-  await saveMembersScanProgress(db, channel.id, pageToken ?? null, nowIso());
+  await saveScanProgress(db, channel.id, 'members', pageToken ?? null, nowIso());
   return upserted;
 }
 
@@ -598,8 +590,7 @@ async function checkAvailability(db: D1Database, yt: YouTubeClient, budget: Requ
   // 対象の読み取り 1 回 + videos.list 1 回 + 書き込み 1 回
   if (budget.remaining < 3) return;
   const now = new Date();
-  const before = toIsoSeconds(new Date(now.getTime() - AVAILABILITY_REFRESH_MS));
-  const targets = await findAvailabilityTargets(db, before, AVAILABILITY_CHECKS_PER_RUN);
+  const targets = await findAvailabilityTargets(db, isoBefore(now, AVAILABILITY_REFRESH_MS), AVAILABILITY_CHECKS_PER_RUN);
   if (targets.length === 0) return;
 
   // 取得に失敗したとき(クォータ超過など)は例外になるので、返ってこなかったことにはならない
@@ -636,18 +627,14 @@ async function syncTwitch(db: D1Database, budget: RequestBudget, env: SyncEnv, c
   const tw = new TwitchClient(env.TWITCH_CLIENT_ID, env.TWITCH_CLIENT_SECRET, budget);
   const now = new Date();
   const stamp = toIsoSeconds(now);
-  const state = await readTwitchState(
-    db,
-    toIsoSeconds(new Date(now.getTime() - TWITCH_CLIP_CHECK_REFRESH_MS)),
-    TWITCH_CLIP_CHECKS_PER_RUN,
-  );
+  const state = await readTwitchState(db, isoBefore(now, TWITCH_CLIP_CHECK_REFRESH_MS), TWITCH_CLIP_CHECKS_PER_RUN);
   const stmts: (D1PreparedStatement | null)[] = [];
 
   if (state.token && Date.parse(state.token.expires_at) - now.getTime() > TWITCH_TOKEN_MARGIN_MS) {
     tw.setToken(state.token.access_token);
   } else {
     const token = await tw.fetchAppToken();
-    stmts.push(saveTwitchTokenStmt(db, token.accessToken, toIsoSeconds(new Date(now.getTime() + token.expiresInSec * 1000))));
+    stmts.push(saveTwitchTokenStmt(db, token.accessToken, isoBefore(now, -token.expiresInSec * 1000)));
   }
 
   try {
@@ -721,20 +708,19 @@ async function twitchClipStmts(
   now: Date,
 ): Promise<D1PreparedStatement[]> {
   const stamp = toIsoSeconds(now);
-  const elapsed = (at: string | null) => (at ? now.getTime() - Date.parse(at) : Infinity);
   const ready = targets.filter((c) => c.twitch_user_id);
 
   const [recent] = ready
-    .filter((c) => elapsed(c.twitch_clips_synced_at) >= TWITCH_CLIPS_REFRESH_MS)
+    .filter((c) => isDue(c.twitch_clips_synced_at, TWITCH_CLIPS_REFRESH_MS, now))
     .sort((a, b) => (a.twitch_clips_synced_at ?? '').localeCompare(b.twitch_clips_synced_at ?? ''));
   if (recent) {
-    const startedAt = toIsoSeconds(new Date(now.getTime() - TWITCH_CLIPS_RECENT_MS));
+    const startedAt = isoBefore(now, TWITCH_CLIPS_RECENT_MS);
     const { clips } = await tw.listClips(recent.twitch_user_id!, { startedAt });
     return [...clipStmts(db, recent.id, clips, stamp), markTwitchClipsSyncedStmt(db, recent.id, stamp)];
   }
 
   const backfill = ready.find(
-    (c) => c.twitch_clips_cursor || elapsed(c.twitch_clips_backfilled_at) >= TWITCH_CLIPS_BACKFILL_MS,
+    (c) => c.twitch_clips_cursor || isDue(c.twitch_clips_backfilled_at, TWITCH_CLIPS_BACKFILL_MS, now),
   );
   if (!backfill) return [];
   const after = backfill.twitch_clips_cursor ?? undefined;
@@ -763,8 +749,7 @@ async function twitchArchiveStmts(
   now: Date,
 ): Promise<(D1PreparedStatement | null)[]> {
   const stamp = toIsoSeconds(now);
-  const refreshedAt = channel.twitch_profile_updated_at ? Date.parse(channel.twitch_profile_updated_at) : 0;
-  const full = !channel.twitch_user_id || now.getTime() - refreshedAt >= TWITCH_PROFILE_REFRESH_MS;
+  const full = !channel.twitch_user_id || isDue(channel.twitch_profile_updated_at, TWITCH_PROFILE_REFRESH_MS, now);
 
   let userId = channel.twitch_user_id;
   let followerCount: number | null = null;
@@ -824,7 +809,7 @@ async function checkSetlists(db: D1Database, yt: YouTubeClient, budget: RequestB
   // 対象の読み取り 1 回 + 書き込み 1 回 + 1 本以上の確認が入らなければ、次回に回す
   if (budget.remaining < 4) return;
   const now = new Date();
-  const hoursAgo = (hours: number) => toIsoSeconds(new Date(now.getTime() - hours * 3600_000));
+  const hoursAgo = (hours: number) => isoBefore(now, hours * 3600_000);
   const targets = await findSetlistTargets(db, {
     now: toIsoSeconds(now),
     notBefore: hoursAgo(SETLIST_CHECK_HOURS[0]),
@@ -994,10 +979,10 @@ async function auditSetlists(db: D1Database, budget: RequestBudget) {
  */
 async function notifySetlistAudits(db: D1Database, budget: RequestBudget, token: string, repo: string) {
   const now = new Date();
-  const jst = new Date(now.getTime() + 9 * 3600_000);
+  const jst = new Date(now.getTime() + JST_OFFSET_MS);
   if (jst.getUTCHours() < SETLIST_AUDIT_NOTIFY_HOUR_JST || budget.remaining < 3) return;
   // JST の今日の 0 時(UTC で表す)
-  const todayStart = new Date(Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth(), jst.getUTCDate()) - 9 * 3600_000);
+  const todayStart = new Date(Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth(), jst.getUTCDate()) - JST_OFFSET_MS);
   const rows = await findSetlistAuditsToNotify(db, toIsoSeconds(todayStart), SETLIST_AUDITS_PER_ISSUE);
   if (rows.length === 0) return;
   // 本文の長さの上限に収まらなかった分は、印を付けずに次の日に回す
@@ -1016,9 +1001,7 @@ async function syncPlaylists(db: D1Database, yt: YouTubeClient, budget: RequestB
   const stamp = toIsoSeconds(now);
 
   // 一覧の取り直し: 1 回の実行で 1 チャンネルまで(YouTube 1 回 + D1 2 回)
-  const due = channels.find(
-    (c) => !c.playlists_synced_at || now.getTime() - Date.parse(c.playlists_synced_at) >= PLAYLISTS_REFRESH_MS,
-  );
+  const due = channels.find((c) => isDue(c.playlists_synced_at, PLAYLISTS_REFRESH_MS, now));
   if (due && budget.remaining >= 5) {
     const lists = await yt.listChannelPlaylists(due.id);
     const known = await listPlaylistIds(db, due.id);

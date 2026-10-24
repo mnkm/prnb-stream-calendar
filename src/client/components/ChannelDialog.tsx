@@ -1,18 +1,15 @@
 import clsx from 'clsx';
 import { ArrowLeft, ChevronRight } from 'lucide-react';
-import { type CSSProperties, useState } from 'react';
+import { type CSSProperties, useCallback, useState } from 'react';
 import type { CalendarEvent, Channel } from '../../shared/types';
-import { twitchChannelUrl } from '../lib/format';
-import { TwitchIcon } from './Badges';
+import { compactNumber, twitchChannelUrl } from '../lib/format';
+import { TwitchIcon, YouTubeIcon } from './Badges';
 import { ChannelClips } from './Clips';
-import { YouTubeIcon } from './Header';
 import { Modal } from './Modal';
 import { PlaylistDetailView, PlaylistGrid } from './Playlists';
 
 /** タレント別の楽曲リスト(各チャンネルで歌われた曲を探せるサイト)。talent パラメータでチャンネルを選んだ状態で開く */
 const SONGLIST_URL = 'https://mnkm.page/prnb-songlist/';
-
-const compactNumber =new Intl.NumberFormat('ja-JP', { notation: 'compact', maximumFractionDigits: 1 });
 
 type ChannelState = { kind: 'channel'; channel: Channel; fromList?: boolean };
 
@@ -37,8 +34,10 @@ interface Props {
 
 /** ヘッダーの YouTube ボタンから開く、チャンネルの一覧・プロフィール・再生リスト */
 export function ChannelDialog({ state, channels, onChange, onOpenEvent, onReturnToEvent }: Props) {
+  // 閉じる関数は描くたびに作り直さない(Modal が、変わるたびに Esc の受け付けを付け直すため)
+  const close = useCallback(() => onChange(null), [onChange]);
   return (
-    <Modal open={state !== null} onClose={() => onChange(null)}>
+    <Modal open={state !== null} onClose={close}>
       {state?.kind === 'list' ? (
         <ChannelList channels={channels} onSelect={(channel) => onChange({ kind: 'channel', channel, fromList: true })} />
       ) : state?.kind === 'channel' ? (
@@ -220,7 +219,6 @@ function ChannelProfile({
         ) : (
           <p className="text-sm text-muted">チャンネルの説明はまだありません。</p>
         )}
-
       </div>
     </div>
   );

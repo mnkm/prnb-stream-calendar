@@ -1,11 +1,10 @@
 import clsx from 'clsx';
 import { format, getDay, isSameMonth, isToday } from 'date-fns';
-import { Crown } from 'lucide-react';
 import type { CalendarEvent, Channel } from '../../shared/types';
-import { WEEKDAY_LABELS, dayKey } from '../lib/calendar';
+import { WEEKDAY_LABELS, dayKey, weekdayTone } from '../lib/calendar';
 import { formatDayHeading, formatTime } from '../lib/format';
 import { TYPE_META } from '../lib/meta';
-import { AvailabilityMark, LiveDot, TwitchMark } from './Badges';
+import { EventMarks, LiveDot } from './Badges';
 
 const MAX_CHIPS = 3;
 const MAX_DOTS = 4;
@@ -19,8 +18,6 @@ interface Props {
   onSelectEvent: (event: CalendarEvent) => void;
   onSelectDay: (date: Date, events: CalendarEvent[]) => void;
 }
-
-const weekdayTone = (weekday: number) => (weekday === 0 ? 'text-sun' : weekday === 6 ? 'text-sat' : '');
 
 export function MonthView({ month, days, byDay, channelMap, showChannelColor, onSelectEvent, onSelectDay }: Props) {
   return (
@@ -127,9 +124,7 @@ function EventChip({
     >
       {event.liveStatus === 'live' ? <LiveDot /> : <Icon className="size-3 shrink-0" aria-hidden />}
       <span className="shrink-0 tabular-nums opacity-75">{formatTime(event.eventAt)}</span>
-      {event.platform === 'twitch' && <TwitchMark />}
-      {event.membersOnly && <Crown className="size-3 shrink-0 text-member" aria-label="メンバー限定" />}
-      <AvailabilityMark event={event} />
+      <EventMarks event={event} />
       <span className="truncate font-medium text-ink/85">{event.title}</span>
     </button>
   );

@@ -1,5 +1,4 @@
-import type { RequestBudget } from './budget';
-import { RequestBudgetExceededError } from './youtube';
+import { type RequestBudget, budgetedFetch } from './budget';
 
 const API_BASE = 'https://api.twitch.tv/helix';
 const TOKEN_URL = 'https://id.twitch.tv/oauth2/token';
@@ -68,10 +67,8 @@ export class TwitchClient {
     this.token = token;
   }
 
-  private async request(input: string | URL, init?: RequestInit): Promise<Response> {
-    if (this.budget.remaining <= 0) throw new RequestBudgetExceededError('request budget exceeded');
-    this.budget.take();
-    return fetch(input, init);
+  private request(input: string | URL, init?: RequestInit): Promise<Response> {
+    return budgetedFetch(this.budget, input, init);
   }
 
   /** アプリ用のアクセストークンを取り直す(このクライアントにも設定する) */

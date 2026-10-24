@@ -1,17 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
-import { ArrowLeft, Crown, ExternalLink, ListVideo, Play } from 'lucide-react';
-import clsx from 'clsx';
+import { ArrowLeft, ExternalLink, ListVideo, Play } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CalendarEvent, Playlist } from '../../shared/types';
 import { channelPlaylistsQuery, playlistQuery, videoPlaylistsQuery } from '../lib/api';
-import { AvailabilityMark } from './Badges';
+import { LOAD_MORE_MARGIN, scrollParent } from '../lib/scroll';
+import { EventMarks } from './Badges';
+import { SegmentedControl } from './SegmentedControl';
 import { Thumbnail } from './Thumbnail';
 
 /** 再生リストの中身で、一度に見せる動画の数 */
 const ITEMS_PER_PAGE = 50;
-/** 一覧の最後がこの距離まで近づいたら、続きを表示する(検索結果と同じ) */
-const LOAD_MORE_MARGIN = '800px';
 
 /** 再生リストの中身の並び順。playlist = YouTube の再生リストの並び(作った人が決めた順) */
 type ItemOrder = 'playlist' | 'desc' | 'asc';
@@ -20,14 +19,6 @@ const ORDER_OPTIONS: { value: ItemOrder; label: string }[] = [
   { value: 'desc', label: '新しい順' },
   { value: 'asc', label: '古い順' },
 ];
-
-/** いちばん近い縦スクロールの親(ダイアログの中身)。無ければ null(画面全体) */
-function scrollParent(el: HTMLElement): HTMLElement | null {
-  for (let p = el.parentElement; p; p = p.parentElement) {
-    if (/(auto|scroll)/.test(getComputedStyle(p).overflowY)) return p;
-  }
-  return null;
-}
 
 const playlistUrl = (id: string) => `https://www.youtube.com/playlist?list=${encodeURIComponent(id)}`;
 
@@ -147,22 +138,7 @@ export function PlaylistDetailView({
             <ExternalLink className="size-4" />
           </a>
           {data.events.length > 1 && (
-            <div role="radiogroup" aria-label="並び順" className="flex w-fit gap-1 self-end rounded-full border border-line p-1">
-              {ORDER_OPTIONS.map(({ value, label }) => (
-                <button
-                  key={value}
-                  role="radio"
-                  aria-checked={order === value}
-                  onClick={() => changeOrder(value)}
-                  className={clsx(
-                    'rounded-full px-3 py-1 text-xs font-medium whitespace-nowrap transition',
-                    order === value ? 'bg-ink text-canvas' : 'text-muted hover:text-ink',
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            <SegmentedControl label="並び順" options={ORDER_OPTIONS} value={order} onChange={changeOrder} />
           )}
           <ol className="flex flex-col">
             {events.slice(0, shown).map((event, i) => (
@@ -179,8 +155,7 @@ export function PlaylistDetailView({
                     </span>
                     <span className="flex items-center gap-1 text-[11px] text-muted tabular-nums">
                       {format(new Date(event.eventAt), 'yyyy/MM/dd')}
-                      {event.membersOnly && <Crown className="size-3 text-member" aria-label="メンバー限定" />}
-                      <AvailabilityMark event={event} />
+                      <EventMarks event={event} />
                     </span>
                   </span>
                 </button>

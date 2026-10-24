@@ -52,8 +52,8 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 | パス | 内容 |
 |---|---|
 | `src/client/App.tsx` | 画面全体の状態(表示モード・日付・フィルター・検索)と URL の同期、スワイプ |
-| `src/client/components/` | カレンダー: `MonthView` / `TimeGridView`(週・日)/ `ListView` / `SearchResults` / `EventRow`(リスト・検索の 1 行)。操作: `Header`(表示切り替え・検索・テーマ)/ `Toolbar`(期間の移動・種別とチャンネルのフィルター)。ダイアログ: `EventDialog`(動画・配信の詳細)/ `ChannelDialog`(チャンネル一覧と詳細)/ `Playlists` / `Clips` / `SetlistSection`。共通: `Badges`(種別・状態・Twitch・再生不可などの印)/ `Thumbnail` / `Highlight` / `Modal` / `ScrollToTop` |
-| `src/client/lib/` | API 呼び出し(`api.ts`)、日付の計算(`calendar.ts`)、表示の整形とリンク先(`format.ts`)、種別ごとの名前・色(`meta.ts`)、テーマ(`theme.ts`) |
+| `src/client/components/` | カレンダー: `MonthView` / `TimeGridView`(週・日)/ `ListView` / `SearchResults` / `EventRow`(リスト・検索の 1 行)。操作: `Header`(表示切り替え・検索・テーマ)/ `Toolbar`(期間の移動・種別とチャンネルのフィルター)。ダイアログ: `EventDialog`(動画・配信の詳細)/ `ChannelDialog`(チャンネル一覧と詳細)/ `Playlists` / `Clips` / `SetlistSection`。共通: `Badges`(種別・状態・Twitch・再生不可などの印と、YouTube・Twitch のアイコン)/ `Thumbnail` / `Highlight` / `Modal` / `SegmentedControl`(並び順の切り替え)/ `ScrollToTop` |
+| `src/client/lib/` | API 呼び出し(`api.ts`)、日付の計算(`calendar.ts`)、表示の整形とリンク先(`format.ts`)、種別ごとの名前・色(`meta.ts`)、テーマ(`theme.ts`)、続きを読み込むためのスクロールの判定(`scroll.ts`) |
 | `src/client/index.css` | 色の定義(テーマごとの CSS 変数、種別・メンバー限定・Twitch の色)と、チャンネルの色で表すボタン |
 | `src/worker/index.ts` | API ルートと Cron ハンドラ |
 | `src/worker/sync.ts` | 同期処理(差分同期・Twitch・過去分の取得・補正・セトリ・再生リスト・再生できるかの確認) |
@@ -61,7 +61,8 @@ React SPA ──fetch──▶ Hono (/api/*) ──▶ D1
 | `src/worker/twitch.ts` | Twitch API(Helix)クライアント |
 | `src/worker/github.ts` | セトリの点検の結果を GitHub の Issue にする |
 | `src/worker/db.ts` | D1 アクセス(保存・期間検索・キーワード検索など、SQL はすべてここ) |
-| `src/worker/budget.ts` | 1 回の実行で使うサブリクエスト数を数える(`RequestBudget`) |
+| `src/worker/budget.ts` | 1 回の実行で使うサブリクエスト数を数える(`RequestBudget`)。外部への fetch はここの `budgetedFetch` を通す |
+| `src/worker/time.ts` | 日時の形をそろえる(`toIsoSeconds`)、何時間前の日時・間隔がたったかの判定 |
 | `src/shared/` | 画面と Worker で共有するもの。型と表示の切り替えの判定(`types.ts`)、検索語の正規化(`search.ts`)、セトリの読み取り(`setlist.ts`)と点検(`setlist-audit.ts`)、おすすめの再生リストの判定(`playlist.ts`) |
 | `migrations/` | D1 のスキーマと初期チャンネル(一覧は「運用」) |
 | `.github/workflows/` | セトリの点検の Issue ができたときに、持ち主へ通知する |

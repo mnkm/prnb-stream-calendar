@@ -3,6 +3,9 @@ import { Crown, EyeOff, Link2 } from 'lucide-react';
 import type { CalendarEvent } from '../../shared/types';
 import { LIVE_STATUS_LABEL, TYPE_META } from '../lib/meta';
 
+/** バッジ(種別・状態などの丸い札)の共通の形 */
+const BADGE = 'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium';
+
 /** 配信中を示す脈打つ点 */
 export function LiveDot({ className }: { className?: string }) {
   return (
@@ -17,7 +20,7 @@ export function TypeBadge({ event }: { event: CalendarEvent }) {
   const meta = TYPE_META[event.type];
   const Icon = meta.icon;
   return (
-    <span className={clsx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium', meta.badge)}>
+    <span className={clsx(BADGE, meta.badge)}>
       <Icon className="size-3" aria-hidden />
       {meta.label}
     </span>
@@ -45,6 +48,28 @@ export function TwitchIcon({ className }: { className?: string }) {
   );
 }
 
+/**
+ * YouTube のアイコン。ほかのボタン(lucide)と同じ線のアイコンにそろえる。
+ * 今の lucide にはブランドのアイコンが無いため、以前の lucide の youtube アイコン(ISC ライセンス)の形を使う
+ */
+export function YouTubeIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden
+    >
+      <path d="M2.5 17a24.12 24.12 0 0 1 0-10 2 2 0 0 1 1.4-1.4 49.56 49.56 0 0 1 16.2 0A2 2 0 0 1 21.5 7a24.12 24.12 0 0 1 0 10 2 2 0 0 1-1.4 1.4 49.55 49.55 0 0 1-16.2 0A2 2 0 0 1 2.5 17" />
+      <path d="m10 15 5-3-5-3z" />
+    </svg>
+  );
+}
+
 /** カレンダーのチップやブロックに付ける、Twitch の配信の小さな印 */
 export function TwitchMark() {
   return (
@@ -58,7 +83,7 @@ export function TwitchMark() {
 export function PlatformBadge({ event }: { event: CalendarEvent }) {
   if (event.platform !== 'twitch') return null;
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-twitch/12 px-2 py-0.5 text-[11px] font-medium text-twitch">
+    <span className={clsx(BADGE, 'bg-twitch/12 text-twitch')}>
       <TwitchIcon className="size-3" />
       Twitch
     </span>
@@ -69,7 +94,7 @@ export function PlatformBadge({ event }: { event: CalendarEvent }) {
 export function AvailabilityBadge({ event }: { event: CalendarEvent }) {
   if (event.unavailableAt) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-ink/10 px-2 py-0.5 text-[11px] font-medium text-muted">
+      <span className={clsx(BADGE, 'bg-ink/10 text-muted')}>
         <EyeOff className="size-3" aria-hidden />
         再生不可
       </span>
@@ -77,7 +102,7 @@ export function AvailabilityBadge({ event }: { event: CalendarEvent }) {
   }
   if (!event.unlisted) return null;
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[11px] font-medium text-muted">
+    <span className={clsx(BADGE, 'border border-line text-muted')}>
       <Link2 className="size-3" aria-hidden />
       限定公開
     </span>
@@ -91,10 +116,21 @@ export function AvailabilityMark({ event }: { event: CalendarEvent }) {
   return null;
 }
 
+/** タイトルの前に並べる小さな印(Twitch・メンバー限定・再生不可・限定公開)。当てはまるものだけを出す */
+export function EventMarks({ event }: { event: CalendarEvent }) {
+  return (
+    <>
+      {event.platform === 'twitch' && <TwitchMark />}
+      {event.membersOnly && <Crown className="size-3 shrink-0 text-member" aria-label="メンバー限定" />}
+      <AvailabilityMark event={event} />
+    </>
+  );
+}
+
 export function MembersOnlyBadge({ event }: { event: CalendarEvent }) {
   if (!event.membersOnly) return null;
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-member/12 px-2 py-0.5 text-[11px] font-medium text-member">
+    <span className={clsx(BADGE, 'bg-member/12 text-member')}>
       <Crown className="size-3" aria-hidden />
       メン限
     </span>

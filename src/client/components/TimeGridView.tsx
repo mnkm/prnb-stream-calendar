@@ -1,12 +1,12 @@
 import clsx from 'clsx';
 import { addDays, format, getDay, isToday } from 'date-fns';
 import { ja } from 'date-fns/locale';
-import { Crown } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CalendarEvent, Channel } from '../../shared/types';
+import { weekdayTone } from '../lib/calendar';
 import { formatTime } from '../lib/format';
 import { TYPE_META } from '../lib/meta';
-import { AvailabilityMark, LiveDot, TwitchMark } from './Badges';
+import { EventMarks, LiveDot } from './Badges';
 import { Thumbnail } from './Thumbnail';
 
 const HOUR_PX = 52;
@@ -39,8 +39,6 @@ interface Placed {
   col: number;
   cols: number;
 }
-
-const weekdayTone = (weekday: number) => (weekday === 0 ? 'text-sun' : weekday === 6 ? 'text-sat' : '');
 
 /**
  * 週表示・日表示。0〜23 時を縦スクロールで表示し、予定を時刻の位置に置く。
@@ -228,9 +226,7 @@ function EventBlock({
             <span className={clsx('shrink-0 tabular-nums opacity-75', !dayView && 'hidden sm:inline')}>
               {formatTime(event.eventAt)}
             </span>
-            {event.platform === 'twitch' && <TwitchMark />}
-            {event.membersOnly && <Crown className="size-3 shrink-0 text-member" aria-label="メンバー限定" />}
-            <AvailabilityMark event={event} />
+            <EventMarks event={event} />
           </div>
           <p className={clsx('font-medium break-all text-ink/85', dayView ? 'line-clamp-2 text-xs' : 'line-clamp-3')}>
             {event.title}

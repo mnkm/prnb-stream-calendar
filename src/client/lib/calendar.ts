@@ -21,6 +21,9 @@ export const VIEW_MODES: readonly ViewMode[] = ['month', 'week', 'day', 'list'];
 
 export const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'];
 
+/** 曜日(0 = 日曜)の文字色。日曜と土曜だけ色を付ける */
+export const weekdayTone = (weekday: number) => (weekday === 0 ? 'text-sun' : weekday === 6 ? 'text-sat' : '');
+
 /** 月表示グリッド(前後の週を含む 5〜6 週)の日付と、取得範囲 [start, end) */
 export function monthGrid(month: Date) {
   const start = startOfWeek(startOfMonth(month), WEEK_OPTIONS);
