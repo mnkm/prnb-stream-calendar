@@ -85,6 +85,8 @@ interface StoredVideoRow extends VideoRow {
 }
 
 const placeholders = (n: number) => Array.from({ length: n }, () => '?').join(',');
+/** 番号付きのプレースホルダ(?3,?4,…)。from は最初の番号(前に別の値を ?1・?2 で渡すとき) */
+const numberedPlaceholders = (n: number, from: number) => Array.from({ length: n }, (_, i) => `?${i + from}`).join(',');
 
 export function toChannel(row: ChannelRow): Channel {
   return {
@@ -173,24 +175,17 @@ export async function saveBackfillProgress(
     .run();
 }
 
-export async function savePremieresScanProgress(db: D1Database, id: string, pageToken: string | null, now: string) {
+/**
+ * 一度だけの補正(premieres = プレミア公開の判定、members = メンバー限定の取り込み)の進み具合を残す。
+ * pageToken が null なら最後まで見たので、終わった日時を入れる
+ */
+export async function saveScanProgress(db: D1Database, id: string, scan: 'premieres' | 'members', pageToken: string | null, now: string) {
+  // 列の名前は scan から決める(利用者の入力は入らない)
   await db
     .prepare(
       `UPDATE channels
-          SET premieres_page_token = ?,
-              premieres_scanned_at = CASE WHEN ? IS NULL THEN ? ELSE premieres_scanned_at END
-        WHERE id = ?`,
-    )
-    .bind(pageToken, pageToken, now, id)
-    .run();
-}
-
-export async function saveMembersScanProgress(db: D1Database, id: string, pageToken: string | null, now: string) {
-  await db
-    .prepare(
-      `UPDATE channels
-          SET members_page_token = ?,
-              members_scanned_at = CASE WHEN ? IS NULL THEN ? ELSE members_scanned_at END
+          SET ${scan}_page_token = ?,
+              ${scan}_scanned_at = CASE WHEN ? IS NULL THEN ? ELSE ${scan}_scanned_at END
         WHERE id = ?`,
     )
     .bind(pageToken, pageToken, now, id)
@@ -277,7 +272,7 @@ export function markVanishedLivesStmt(db: D1Database, ids: string[], now: string
       `UPDATE videos
           SET live_status = 'ended', ended_at = COALESCE(ended_at, ?1), unavailable_at = ?1, missing_count = 2,
               availability_checked_at = ?1, updated_at = ?1
-        WHERE id IN (${ids.map((_, i) => `?${i + 2}`).join(',')})`,
+        WHERE id IN (${numberedPlaceholders(ids.length, 2)})`,
     )
     .bind(now, ...ids);
 }
@@ -313,7 +308,7 @@ export function availabilityStmts(
           .prepare(
             `UPDATE videos
                 SET unavailable_at = NULL, missing_count = 0, unlisted = ?1, availability_checked_at = ?2
-              WHERE id IN (${ids.map((_, i) => `?${i + 3}`).join(',')})`,
+              WHERE id IN (${numberedPlaceholders(ids.length, 3)})`,
           )
           .bind(unlisted, now, ...ids);
   const missing =
@@ -325,7 +320,7 @@ export function availabilityStmts(
                 SET missing_count = missing_count + 1,
                     unavailable_at = CASE WHEN missing_count >= 1 THEN COALESCE(unavailable_at, ?1) ELSE unavailable_at END,
                     availability_checked_at = CASE WHEN missing_count >= 1 THEN ?1 ELSE availability_checked_at END
-              WHERE id IN (${r.missingIds.map((_, i) => `?${i + 2}`).join(',')})`,
+              WHERE id IN (${numberedPlaceholders(r.missingIds.length, 2)})`,
           )
           .bind(now, ...r.missingIds);
   return [found(r.publicIds, 0), found(r.unlistedIds, 1), missing];
@@ -457,6 +452,23 @@ function decodeCursor(cursor: string): { eventAt: string; id: string } | null {
 }
 
 /**
+ * 新しい順(event_at DESC, id DESC)の一覧で、前のページの続きから読む条件を where と params に足す。
+ * column は列の前に付ける名前(「v.」など)
+ */
+function addCursorCondition(where: string[], params: (string | number)[], cursor: string | null, column = '') {
+  const c = cursor ? decodeCursor(cursor) : null;
+  if (!c) return;
+  where.push(`(${column}event_at < ? OR (${column}event_at = ? AND ${column}id < ?))`);
+  params.push(c.eventAt, c.eventAt, c.id);
+}
+
+/** limit + 1 件読んだ結果を、1 ページ分と、続きがあるか(次のページの cursor)に分ける */
+function splitPage<T extends VideoRow>(results: T[], limit: number): { rows: T[]; nextCursor: string | null } {
+  const rows = results.slice(0, limit);
+  return { rows, nextCursor: results.length > limit ? encodeCursor(rows[rows.length - 1]) : null };
+}
+
+/**
  * タイトルに全てのキーワード(splitSearchTerms で正規化済み)を含むものを、新しい順に 1 ページ分返す。
  * 最初のページでは、切り替えの単位ごとの件数(種別・Twitch の絞り込み前)も数える。
  * Twitch の配信は twitch に数え、live には入れない
@@ -481,11 +493,7 @@ export async function searchEvents(db: D1Database, q: SearchQuery): Promise<Sear
     params.push(...q.types);
   }
   if (!q.includeTwitch) where.push(`v.platform != 'twitch'`);
-  const cursor = q.cursor ? decodeCursor(q.cursor) : null;
-  if (cursor) {
-    where.push('(v.event_at < ? OR (v.event_at = ? AND v.id < ?))');
-    params.push(cursor.eventAt, cursor.eventAt, cursor.id);
-  }
+  addCursorCondition(where, params, q.cursor, 'v.');
 
   const pageStmt = db
     .prepare(
@@ -507,8 +515,7 @@ export async function searchEvents(db: D1Database, q: SearchQuery): Promise<Sear
     q.cursor ? null : countStmt.all<{ filter: EventFilter; n: number }>(),
   ]);
 
-  const rows = page.results.slice(0, q.limit);
-  const hasMore = page.results.length > q.limit;
+  const { rows, nextCursor } = splitPage(page.results, q.limit);
   let counts: Record<EventFilter, number> | undefined;
   if (countRows) {
     counts = { live: 0, video: 0, short: 0, twitch: 0 };
@@ -518,7 +525,7 @@ export async function searchEvents(db: D1Database, q: SearchQuery): Promise<Sear
     const matchedSongs = row.setlist_songs ? matchSongs(row.setlist_songs, q.terms) : [];
     return matchedSongs.length > 0 ? { ...toEvent(row), matchedSongs } : toEvent(row);
   });
-  return { events, nextCursor: hasMore ? encodeCursor(rows[rows.length - 1]) : null, counts };
+  return { events, nextCursor, counts };
 }
 
 export interface VideoListQuery {
@@ -564,11 +571,7 @@ export async function listVideos(db: D1Database, q: VideoListQuery): Promise<Vid
     where.push('event_at < ?');
     params.push(q.before);
   }
-  const cursor = q.cursor ? decodeCursor(q.cursor) : null;
-  if (cursor) {
-    where.push('(event_at < ? OR (event_at = ? AND id < ?))');
-    params.push(cursor.eventAt, cursor.eventAt, cursor.id);
-  }
+  addCursorCondition(where, params, q.cursor);
 
   const pageStmt = db
     .prepare(`SELECT * FROM videos WHERE ${where.join(' AND ')} ORDER BY event_at DESC, id DESC LIMIT ?`)
@@ -582,8 +585,7 @@ export async function listVideos(db: D1Database, q: VideoListQuery): Promise<Vid
     q.cursor ? null : countStmt.all<{ type: VideoType; n: number; m: number }>(),
   ]);
 
-  const rows = page.results.slice(0, q.limit);
-  const hasMore = page.results.length > q.limit;
+  const { rows, nextCursor } = splitPage(page.results, q.limit);
   let counts: VideoListCounts | undefined;
   if (countRows) {
     counts = { live: 0, video: 0, short: 0, members: 0 };
@@ -592,7 +594,7 @@ export async function listVideos(db: D1Database, q: VideoListQuery): Promise<Vid
       counts.members += m;
     }
   }
-  return { events: rows.map(toEvent), nextCursor: hasMore ? encodeCursor(rows[rows.length - 1]) : null, counts };
+  return { events: rows.map(toEvent), nextCursor, counts };
 }
 
 /** 保存してある曲(setlists.songs の JSON)のうち、曲名かアーティストに検索語のどれかを含むもの */
@@ -820,21 +822,24 @@ const toPlaylist = (row: PlaylistRow): Playlist => ({
   recommended: isRecommendedPlaylist(row.title),
 });
 
+/** 並べ替えに使う日時(最後に動画が追加された日時。まだ中身を読んでいなければ、再生リストを作った日時)も読む行 */
+type SortablePlaylistRow = PlaylistRow & { last_added_at: string | null; published_at: string | null };
+
 /** おすすめを先頭に、残りは最後に動画が追加された順 */
-const sortPlaylists = (lists: (Playlist & { lastAddedAt: string | null })[]) =>
-  lists
+const sortPlaylists = (rows: SortablePlaylistRow[]): Playlist[] =>
+  rows
+    .map((r) => ({ playlist: toPlaylist(r), lastAddedAt: r.last_added_at ?? r.published_at ?? '' }))
     .sort(
-      (a, b) =>
-        Number(b.recommended) - Number(a.recommended) || (b.lastAddedAt ?? '').localeCompare(a.lastAddedAt ?? ''),
+      (a, b) => Number(b.playlist.recommended) - Number(a.playlist.recommended) || b.lastAddedAt.localeCompare(a.lastAddedAt),
     )
-    .map(({ lastAddedAt: _, ...p }) => p);
+    .map((p) => p.playlist);
 
 export async function listChannelPlaylists(db: D1Database, channelId: string): Promise<Playlist[]> {
   const { results } = await db
     .prepare('SELECT * FROM playlists WHERE channel_id = ? AND item_count > 0')
     .bind(channelId)
-    .all<PlaylistRow & { last_added_at: string | null; published_at: string | null }>();
-  return sortPlaylists(results.map((r) => ({ ...toPlaylist(r), lastAddedAt: r.last_added_at ?? r.published_at })));
+    .all<SortablePlaylistRow>();
+  return sortPlaylists(results);
 }
 
 export async function getPlaylistDetail(db: D1Database, playlistId: string): Promise<PlaylistDetail | null> {
@@ -859,8 +864,8 @@ export async function listVideoPlaylists(db: D1Database, videoId: string): Promi
         WHERE i.video_id = ?`,
     )
     .bind(videoId)
-    .all<PlaylistRow & { last_added_at: string | null; published_at: string | null }>();
-  return sortPlaylists(results.map((r) => ({ ...toPlaylist(r), lastAddedAt: r.last_added_at ?? r.published_at })));
+    .all<SortablePlaylistRow>();
+  return sortPlaylists(results);
 }
 
 export async function listPlaylistIds(db: D1Database, channelId: string): Promise<string[]> {
@@ -985,7 +990,7 @@ export function twitchClipCheckStmts(db: D1Database, foundIds: string[], missing
       db
         .prepare(
           `UPDATE twitch_clips SET missing_count = 0, checked_at = ?1
-            WHERE id IN (${foundIds.map((_, i) => `?${i + 2}`).join(',')})`,
+            WHERE id IN (${numberedPlaceholders(foundIds.length, 2)})`,
         )
         .bind(now, ...foundIds),
     );

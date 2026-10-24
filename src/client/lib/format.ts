@@ -26,6 +26,9 @@ export function formatDuration(totalSec: number | null): string | null {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
+/** 登録者数・再生数などを短く(「1.2万」) */
+export const compactNumber = new Intl.NumberFormat('ja-JP', { notation: 'compact', maximumFractionDigits: 1 });
+
 export const twitchChannelUrl = (login: string) => `https://www.twitch.tv/${encodeURIComponent(login)}`;
 
 /** Twitch は、配信中ならチャンネル、終わっていればアーカイブを開く(アーカイブが無ければチャンネル) */

@@ -4,6 +4,7 @@ import { motion } from 'motion/react';
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { ViewMode } from '../lib/calendar';
 import { type Theme, useTheme } from '../lib/theme';
+import { YouTubeIcon } from './Badges';
 
 const VIEW_OPTIONS: { value: ViewMode; label: string; icon: typeof List }[] = [
   { value: 'month', label: '月', icon: CalendarDays },
@@ -208,28 +209,6 @@ function ViewTabs({ view, onViewChange }: { view: ViewMode; onViewChange: (view:
         </button>
       ))}
     </div>
-  );
-}
-
-/**
- * YouTube のアイコン。ほかのボタン(lucide)と同じ線のアイコンにそろえる。
- * 今の lucide にはブランドのアイコンが無いため、以前の lucide の youtube アイコン(ISC ライセンス)の形を使う
- */
-export function YouTubeIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden
-    >
-      <path d="M2.5 17a24.12 24.12 0 0 1 0-10 2 2 0 0 1 1.4-1.4 49.56 49.56 0 0 1 16.2 0A2 2 0 0 1 21.5 7a24.12 24.12 0 0 1 0 10 2 2 0 0 1-1.4 1.4 49.55 49.55 0 0 1-16.2 0A2 2 0 0 1 2.5 17" />
-      <path d="m10 15 5-3-5-3z" />
-    </svg>
   );
 }
 

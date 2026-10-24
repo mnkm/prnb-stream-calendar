@@ -5,33 +5,23 @@ import { ExternalLink, Play } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { Clip, ClipSort } from '../../shared/types';
 import { channelClipsQuery, eventClipsQuery } from '../lib/api';
-import { formatDuration } from '../lib/format';
+import { compactNumber, formatDuration } from '../lib/format';
+import { LOAD_MORE_MARGIN, scrollParent } from '../lib/scroll';
+import { SegmentedControl } from './SegmentedControl';
 
 /** 配信の詳細で最初に見せるクリップの数(残りは「すべて見る」で開く) */
 const INITIAL_EVENT_CLIPS = 4;
-/** 一覧の最後がこの距離まで近づいたら、続きを読み込む(検索結果と同じ) */
-const LOAD_MORE_MARGIN = '800px';
 
 const SORT_OPTIONS: { value: ClipSort; label: string }[] = [
   { value: 'popular', label: '人気順' },
   { value: 'new', label: '新しい順' },
 ];
 
-const compactNumber = new Intl.NumberFormat('ja-JP', { notation: 'compact', maximumFractionDigits: 1 });
-
 const clipUrl = (id: string) => `https://clips.twitch.tv/${encodeURIComponent(id)}`;
 
 /** クリップの埋め込みプレーヤーの URL(埋め込む側のホスト名を parent で渡す必要がある) */
 export const clipEmbedUrl = (id: string) =>
   `https://clips.twitch.tv/embed?${new URLSearchParams({ clip: id, parent: location.hostname, autoplay: 'true' })}`;
-
-/** いちばん近い縦スクロールの親(ダイアログの中身)。無ければ null(画面全体) */
-function scrollParent(el: HTMLElement): HTMLElement | null {
-  for (let p = el.parentElement; p; p = p.parentElement) {
-    if (/(auto|scroll)/.test(getComputedStyle(p).overflowY)) return p;
-  }
-  return null;
-}
 
 function ClipCard({ clip, playing, onPlay }: { clip: Clip; playing: boolean; onPlay: () => void }) {
   const duration = formatDuration(clip.durationSec === null ? null : Math.round(clip.durationSec));
@@ -197,22 +187,7 @@ export function ChannelClips({ channelId }: { channelId: string }) {
         </div>
       )}
 
-      <div role="radiogroup" aria-label="並び順" className="flex w-fit gap-1 self-end rounded-full border border-line p-1">
-        {SORT_OPTIONS.map(({ value, label }) => (
-          <button
-            key={value}
-            role="radio"
-            aria-checked={sort === value}
-            onClick={() => setSort(value)}
-            className={clsx(
-              'rounded-full px-3 py-1 text-xs font-medium whitespace-nowrap transition',
-              sort === value ? 'bg-ink text-canvas' : 'text-muted hover:text-ink',
-            )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <SegmentedControl label="並び順" options={SORT_OPTIONS} value={sort} onChange={setSort} />
 
       {status && <p className="py-6 text-center text-sm text-muted">{status}</p>}
       <ul className="grid grid-cols-2 gap-x-3 gap-y-4">

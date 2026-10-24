@@ -1,4 +1,4 @@
-import type { RequestBudget } from './budget';
+import { type RequestBudget, budgetedFetch } from './budget';
 
 const API_BASE = 'https://www.googleapis.com/youtube/v3';
 
@@ -115,6 +115,9 @@ export class YouTubeApiError extends Error {
   }
 }
 
+/** 続きのページを取るときの pageToken(最初のページなら何も付けない) */
+const pageParam = (pageToken: string | undefined): Record<string, string> => (pageToken ? { pageToken } : {});
+
 // チャンネル ID (UCxxxx) から各種システムプレイリスト ID を導出する。
 // UU = 全アップロード(公式。メンバー限定は含まない)。UUSH = ショートのみ、
 // UULF = 「動画」タブ(プレミア公開を含み、ライブは含まない)、UUMO = メンバー限定のすべて、
@@ -124,9 +127,6 @@ export const shortsPlaylistId = (channelId: string) => `UUSH${channelId.slice(2)
 export const videosPlaylistId = (channelId: string) => `UULF${channelId.slice(2)}`;
 export const membersPlaylistId = (channelId: string) => `UUMO${channelId.slice(2)}`;
 export const membersVideosPlaylistId = (channelId: string) => `UUMF${channelId.slice(2)}`;
-
-/** 1 回の実行で使えるサブリクエストの予算を使い切った */
-export class RequestBudgetExceededError extends Error {}
 
 /**
  * YouTube への外部リクエスト(API・RSS・/shorts の確認)をまとめて行い、予算に数える。
@@ -141,10 +141,8 @@ export class YouTubeClient {
     this.budget = budget;
   }
 
-  private async request(input: string | URL, init?: RequestInit): Promise<Response> {
-    if (this.budget.remaining <= 0) throw new RequestBudgetExceededError('request budget exceeded');
-    this.budget.take();
-    return fetch(input, init);
+  private request(input: string | URL, init?: RequestInit): Promise<Response> {
+    return budgetedFetch(this.budget, input, init);
   }
 
   /** maxBytes を渡すと、応答がそれより大きいときに、解析せずに ResponseTooLargeError にする(本文は受け取ってから大きさを見る) */
@@ -174,7 +172,6 @@ export class YouTubeClient {
     return data.items?.[0] ?? null;
   }
 
-  /** 1 unit / ページ (最大 50 件)。プレイリストが存在しなければ null */
   /** チャンネルの公開の再生リスト(全ページ)。1 unit / 50 件 */
   async listChannelPlaylists(channelId: string): Promise<YtPlaylist[]> {
     const lists: YtPlaylist[] = [];
@@ -191,7 +188,7 @@ export class YouTubeClient {
         part: 'snippet,contentDetails',
         channelId,
         maxResults: '50',
-        ...(pageToken ? { pageToken } : {}),
+        ...pageParam(pageToken),
       });
       for (const p of data.items ?? []) {
         lists.push({
@@ -217,7 +214,7 @@ export class YouTubeClient {
         part: 'snippet,contentDetails',
         playlistId,
         maxResults: '50',
-        ...(pageToken ? { pageToken } : {}),
+        ...pageParam(pageToken),
       });
       return {
         items: (data.items ?? []).map((i) => ({
@@ -238,6 +235,7 @@ export class YouTubeClient {
     }
   }
 
+  /** 再生リストの動画 ID の 1 ページ。1 unit / ページ (最大 50 件)。再生リストが存在しなければ null */
   async listPlaylistPage(playlistId: string, pageToken?: string): Promise<PlaylistPage | null> {
     try {
       const data = await this.get<{
@@ -247,7 +245,7 @@ export class YouTubeClient {
         part: 'contentDetails',
         playlistId,
         maxResults: '50',
-        ...(pageToken ? { pageToken } : {}),
+        ...pageParam(pageToken),
       });
       return {
         ids: (data.items ?? []).map((item) => item.contentDetails.videoId),

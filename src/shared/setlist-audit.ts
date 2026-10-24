@@ -86,7 +86,7 @@ export function auditSetlist(text: string | null, durationSec: number | null): S
   add('not_song', '曲以外(開始・挨拶・告知など)が曲として出ている疑い', songs.filter((s) => NOT_SONG_WORDS.test(s.title)));
   add(
     'leftover',
-    '曲名・アーティストに時刻・区切り記号・「※」「@」が残っている',
+    '曲名・アーティストに時刻・区切り記号・「※」が残っている',
     songs.filter((s) =>
       [s.title, s.artist ?? ''].some((v) => LEFTOVER_TIME.test(v) || LEFTOVER_EDGE.test(v) || LEFTOVER_MARK.test(v)),
     ),

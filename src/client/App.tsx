@@ -2,7 +2,7 @@ import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@t
 import { addMonths, format, startOfDay, startOfMonth } from 'date-fns';
 import { type PanInfo, motion, useDragControls } from 'motion/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { EVENT_FILTERS, type EventFilter, VIDEO_TYPES, filterOf, isFilterOn } from '../shared/types';
+import { type CalendarEvent, EVENT_FILTERS, type EventFilter, VIDEO_TYPES, filterOf, isFilterOn } from '../shared/types';
 import { ChannelDialog, type ChannelDialogState } from './components/ChannelDialog';
 import { EventDialog, type DialogState } from './components/EventDialog';
 import { Header } from './components/Header';
@@ -179,6 +179,7 @@ export default function App() {
     if (far || flick) shift(offset.x < 0 ? 1 : -1);
   };
 
+  const openEvent = (event: CalendarEvent) => setDialog({ kind: 'event', event });
   const openDay = (day: Date) => {
     setDirection(0);
     setView('day');
@@ -222,7 +223,7 @@ export default function App() {
             showTwitch={channels.some((c) => c.twitchLogin)}
             channelMap={channelMap}
             showChannelColor={showChannelColor}
-            onSelectEvent={(event) => setDialog({ kind: 'event', event })}
+            onSelectEvent={openEvent}
           />
         ) : (
           <>
@@ -280,7 +281,7 @@ export default function App() {
                   events={visible}
                   channelMap={channelMap}
                   showChannelColor={showChannelColor}
-                  onSelectEvent={(event) => setDialog({ kind: 'event', event })}
+                  onSelectEvent={openEvent}
                   onSelectDay={view === 'week' ? openDay : undefined}
                 />
               ) : view === 'month' ? (
@@ -290,7 +291,7 @@ export default function App() {
                   byDay={byDay}
                   channelMap={channelMap}
                   showChannelColor={showChannelColor}
-                  onSelectEvent={(event) => setDialog({ kind: 'event', event })}
+                  onSelectEvent={openEvent}
                   onSelectDay={(date, events) => setDialog({ kind: 'day', date, events })}
                 />
               ) : (
@@ -299,7 +300,7 @@ export default function App() {
                   byDay={byDay}
                   channelMap={channelMap}
                   showChannelColor={showChannelColor}
-                  onSelectEvent={(event) => setDialog({ kind: 'event', event })}
+                  onSelectEvent={openEvent}
                 />
               )}
             </motion.div>

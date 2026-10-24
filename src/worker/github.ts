@@ -1,6 +1,7 @@
 import type { SetlistProblem } from '../shared/setlist-audit';
-import type { RequestBudget } from './budget';
+import { type RequestBudget, budgetedFetch } from './budget';
 import type { SetlistAuditToNotify } from './db';
+import { JST_OFFSET_MS } from './time';
 
 /** セトリの点検の Issue に付けるラベル */
 export const SETLIST_AUDIT_LABEL = 'setlist-check';
@@ -35,15 +36,14 @@ function wellFormed(s: string) {
   return out + s.slice(from);
 }
 
-/** GitHub に Issue を作る。作った Issue の URL を返す。サブリクエストの予算に 1 回分数える */
+/** GitHub に Issue を作る。作った Issue の URL を返す。サブリクエストの予算に 1 回分数える(使い切っていれば送らない) */
 export async function createIssue(
   budget: RequestBudget,
   token: string,
   repo: string,
   issue: { title: string; body: string; labels: string[] },
 ): Promise<string> {
-  budget.take();
-  const res = await fetch(`https://api.github.com/repos/${repo}/issues`, {
+  const res = await budgetedFetch(budget, `https://api.github.com/repos/${repo}/issues`, {
     method: 'POST',
     headers: {
       Accept: 'application/vnd.github+json',
@@ -60,7 +60,7 @@ export async function createIssue(
 
 /** UTC の ISO 8601 を「2026-10-09 21:00」(JST)に */
 const toJst = (iso: string) =>
-  new Date(Date.parse(iso) + 9 * 3600_000).toISOString().slice(0, 16).replace('T', ' ');
+  new Date(Date.parse(iso) + JST_OFFSET_MS).toISOString().slice(0, 16).replace('T', ' ');
 
 /*
  * Issue に載せる文字列のうち、動画のタイトル・チャンネル名・コメントの書き手・コメントの本文と、そこから読み取った曲は、

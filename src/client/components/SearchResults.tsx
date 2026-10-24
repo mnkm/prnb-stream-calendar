@@ -11,12 +11,10 @@ import {
   isFilterOn,
 } from '../../shared/types';
 import { dayKey } from '../lib/calendar';
+import { LOAD_MORE_MARGIN } from '../lib/scroll';
 import { EventRow } from './EventRow';
 import { ScrollToTop } from './ScrollToTop';
 import { TypeFilters } from './Toolbar';
-
-/** リストの最後がこの距離まで近づいたら、続きを読み込み始める */
-const LOAD_MORE_MARGIN = '800px';
 
 interface Props {
   query: string;

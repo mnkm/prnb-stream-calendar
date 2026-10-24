@@ -57,6 +57,10 @@ const app = new Hono<{ Bindings: Bindings }>().basePath('/api');
 function clientKey(ip: string | undefined): string {
   if (!ip) return 'unknown';
   if (!ip.includes(':')) return ip;
+  // IPv4 を IPv6 の形で書いたもの(::ffff:1.2.3.4)は、IPv4 のアドレスごとに数える
+  // (/64 にまとめると、この形のアドレスがすべて同じ「0:0:0:0」として数えられてしまう)
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (mapped) return mapped[1];
   const [head, tail] = ip.split('::');
   const first = head ? head.split(':') : [];
   const last = tail ? tail.split(':') : [];

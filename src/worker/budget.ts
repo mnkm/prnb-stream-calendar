@@ -20,6 +20,19 @@ export class RequestBudget {
   }
 }
 
+/** 1 回の実行で使えるサブリクエストの予算を使い切った */
+export class RequestBudgetExceededError extends Error {}
+
+/**
+ * 外部への fetch を 1 回分、予算に数えてから行う。予算を使い切っていれば、送らずに RequestBudgetExceededError にする
+ * (YouTube・Twitch・GitHub のクライアントが使う)
+ */
+export function budgetedFetch(budget: RequestBudget, input: string | URL, init?: RequestInit): Promise<Response> {
+  if (budget.remaining <= 0) throw new RequestBudgetExceededError('request budget exceeded');
+  budget.take();
+  return fetch(input, init);
+}
+
 /** D1 の呼び出し(all / run / first / raw / batch)を予算に数える D1Database を返す */
 export function countD1(db: D1Database, budget: RequestBudget): D1Database {
   // batch() には元の D1PreparedStatement を渡す必要があるので、ラップ前の文を覚えておく
