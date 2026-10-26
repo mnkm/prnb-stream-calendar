@@ -51,6 +51,8 @@ interface YtCommentSnippet {
 
 interface YtCommentThread {
   snippet: { topLevelComment: { id: string; snippet: YtCommentSnippet }; totalReplyCount?: number };
+  /** part に replies を入れたときだけ。返信の一部(多くて 5 件ほど)で、全部とは限らない */
+  replies?: { comments?: { snippet: YtCommentSnippet }[] };
 }
 
 /**
@@ -83,6 +85,12 @@ export interface YtComment {
   likeCount: number;
   /** 返信の数(返信そのものは getReplies で取る) */
   replyCount: number;
+}
+
+/** 返信の一部が付いたコメント(getCommentThreads) */
+export interface YtCommentWithReplies extends YtComment {
+  /** 返信の一部(多くて 5 件ほど)。replyCount より少なければ、残りは getReplies で取る */
+  replies: YtReply[];
 }
 
 export interface YtPlaylist {
@@ -282,6 +290,38 @@ export class YouTubeClient {
       }));
     } catch (err) {
       // 403 はクォータ超過などでも返るので、コメントが無効な場合(commentsDisabled)だけを見分ける
+      const disabled = err instanceof YouTubeApiError && err.status === 403 && err.message.includes('commentsDisabled');
+      if (disabled || (err instanceof YouTubeApiError && err.status === 404)) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * 関連性順のコメントと、それぞれの返信の一部(多くて 5 件ほど)。1 unit(getTopComments と同じ)。
+   * コメントが無効・動画が見つからない場合は null
+   */
+  async getCommentThreads(videoId: string, max: number): Promise<YtCommentWithReplies[] | null> {
+    try {
+      const data = await this.get<{ items?: YtCommentThread[] }>('commentThreads', {
+        part: 'snippet,replies',
+        videoId,
+        order: 'relevance',
+        maxResults: String(max),
+        textFormat: 'plainText',
+        fields:
+          'items(snippet(totalReplyCount,topLevelComment(id,snippet(authorDisplayName,textDisplay,authorChannelId,likeCount))),' +
+          'replies(comments(snippet(textDisplay,authorChannelId,publishedAt))))',
+      }, COMMENTS_MAX_BYTES);
+      return (data.items ?? []).map((t) => ({
+        id: t.snippet.topLevelComment.id,
+        author: t.snippet.topLevelComment.snippet.authorDisplayName,
+        text: t.snippet.topLevelComment.snippet.textDisplay,
+        authorChannelId: t.snippet.topLevelComment.snippet.authorChannelId?.value ?? null,
+        likeCount: t.snippet.topLevelComment.snippet.likeCount ?? 0,
+        replyCount: t.snippet.totalReplyCount ?? 0,
+        replies: (t.replies?.comments ?? []).map((r) => toReply(r.snippet)),
+      }));
+    } catch (err) {
       const disabled = err instanceof YouTubeApiError && err.status === 403 && err.message.includes('commentsDisabled');
       if (disabled || (err instanceof YouTubeApiError && err.status === 404)) return null;
       throw err;

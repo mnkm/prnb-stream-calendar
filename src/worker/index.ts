@@ -4,6 +4,7 @@ import { splitSearchTerms } from '../shared/search';
 import { type ClipSort, VIDEO_TYPES, type VideoType } from '../shared/types';
 import {
   type EventQuery,
+  type MorningCommentQuery,
   type SearchQuery,
   type VideoListQuery,
   getPlaylistDetail,
@@ -11,6 +12,7 @@ import {
   listChannelClips,
   listChannelPlaylists,
   listEventClips,
+  listMorningComments,
   listEnabledChannels,
   listVideoPlaylists,
   listVideos,
@@ -37,6 +39,8 @@ const MAX_ID_LENGTH = 64;
 const SEARCH_PAGE_SIZE = 50;
 /** 動画の一覧の 1 ページの件数(既定で、limit の上限でもある) */
 const VIDEO_LIST_PAGE_SIZE = 50;
+/** 朝活のコメントの一覧の 1 ページの配信の数(既定で、limit の上限でもある) */
+const MORNING_PAGE_SIZE = 50;
 const MAX_SEARCH_TERMS = 5;
 const MAX_SEARCH_TERM_LENGTH = 50;
 /** 検索語に分ける前の長さの上限(MAX_SEARCH_TERMS 個の語と、あいだの空白が入る長さ) */
@@ -91,8 +95,9 @@ const rateLimit = (pick: (env: Bindings) => RateLimit | undefined): MiddlewareHa
  * (順番を変える・ヘッダーを足すなど、内容が同じまま書き方だけを変えても、キャッシュを避けられない)。
  * 内容そのものを変えればキーは変わるので、キャッシュに無い問い合わせの回数はレート制限で抑える。
  *
- * 使うのは検索と動画の一覧だけ。検索はデータベースを全件読むので、同じ検索の繰り返しを安く防げる。検索結果が少し古くても、
+ * 使うのは検索・動画の一覧・朝活のコメント。検索はデータベースを全件読むので、同じ検索の繰り返しを安く防げる。検索結果が少し古くても、
  * 同期の結果が画面に出る速さには響きにくい。動画の一覧は、終わった配信と公開済みの動画だけを返すので、少し古くても困らない。
+ * 朝活のコメントも置く(配信終了から 30 日後まで取り直すものなので、少し古くても困らない)。
  * 予定やセトリなどは、反映が遅れないよう、ここには置かない。
  *
  * 応答の Cache-Control は、ルートではなくここで付ける(キャッシュに置く期間と、ブラウザが持つ期間を同じにする)。
@@ -243,6 +248,33 @@ app.get('/setlist/:id', validId, async (c) => {
   c.header('Cache-Control', 'public, max-age=60');
   return c.json(setlist);
 });
+
+/** /morning-comments の問い合わせ。正しくない値は既定の値にそろえる(/videos と同じ) */
+function parseMorningCommentQuery(c: Context): MorningCommentQuery {
+  const limit = Number(c.req.query('limit'));
+  const cursor = c.req.query('cursor');
+  return {
+    channelIds: parseIdList(c.req.query('channels')),
+    cursor: cursor && CURSOR_FORMAT.test(cursor) ? cursor : null,
+    limit: Number.isInteger(limit) && limit >= 1 && limit <= MORNING_PAGE_SIZE ? limit : MORNING_PAGE_SIZE,
+  };
+}
+
+/**
+ * 朝活の配信(タイトルに「朝活」があるもの)のコメントのうち、ボイスや今日の質問のタイムスタンプを含むもの
+ * (選び方は src/shared/morning.ts)と、目で確かめて足したボイス(src/worker/morning-manual.ts)。
+ * そういうコメントか足したボイスがある配信だけを、新しい順に返す。
+ * channels で絞り込み、limit(1〜50、既定 50)本ずつ返し、続きは cursor に nextCursor を渡して取る。
+ * コメントは配信終了から 30 日後まで取り直すので、少し古くても困らない
+ */
+app.get(
+  '/morning-comments',
+  cached(300, (c) => JSON.stringify(parseMorningCommentQuery(c))),
+  async (c) => {
+    // Cache-Control は cached が付ける
+    return c.json(await listMorningComments(c.env.DB, parseMorningCommentQuery(c)));
+  },
+);
 
 /** チャンネルの再生リスト(おすすめを先頭に、残りは最後に動画が追加された順) */
 app.get('/channels/:id/playlists', validId, async (c) => {

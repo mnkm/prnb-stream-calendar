@@ -152,3 +152,45 @@ export interface PlaylistDetail {
   playlist: Playlist;
   events: CalendarEvent[];
 }
+
+/** 朝活の配信のコメントのうち、ボイスや今日の質問のタイムスタンプを含むもの(選び方は src/shared/morning.ts) */
+export interface MorningComment {
+  id: string;
+  /** コメントを書いた人の表示名(@ から始まるハンドル) */
+  author: string;
+  authorChannelId: string | null;
+  text: string;
+  likeCount: number;
+}
+
+/** 朝活の配信 1 本分 */
+export interface MorningVideo {
+  videoId: string;
+  channelId: string;
+  title: string;
+  /** 配信の開始日時(UTC、ISO 8601。CalendarEvent の eventAt と同じ) */
+  eventAt: string;
+  /** 配信の終了日時 */
+  endedAt: string;
+  /** 関連性順(YouTube の並び) */
+  comments: MorningComment[];
+  /** 目で確かめて足したボイス(コメントからは「ボイス🎤」の形で読み取れない回の分)。時刻の順 */
+  manualVoices: MorningManualVoice[];
+}
+
+/** 目で確かめて足したボイス 1 つ分(src/worker/morning-manual.ts) */
+export interface MorningManualVoice {
+  /** 配信の中の時刻(HH:MM:SS) */
+  time: string;
+  /** ボイスの名前(タイムスタンプのコメントの行をもとにしたもの) */
+  name: string;
+  /** そのボイスの行があるコメントの id(返信のときは返信の id)。無ければ null */
+  commentId: string | null;
+}
+
+/** /api/morning-comments の 1 ページ */
+export interface MorningCommentPage {
+  videos: MorningVideo[];
+  /** 次のページを取るときに cursor に渡す値。最後のページなら null */
+  nextCursor: string | null;
+}
