@@ -1,5 +1,6 @@
 import { normalizeForSearch } from '../shared/search';
 import { isRecommendedPlaylist } from '../shared/playlist';
+import { MORNING_MANUAL_VOICES } from './morning-manual';
 import type {
   CalendarEvent,
   Clip,
@@ -807,7 +808,7 @@ export interface MorningCommentQuery {
 }
 
 /**
- * 選んだコメントがある朝活の配信を、新しい順に 1 ページ分返す。今は見られない配信(非公開・削除・メンバー限定・限定公開)は除く。
+ * 選んだコメントか、目で確かめて足したボイス(morning-manual.ts)がある朝活の配信を、新しい順に 1 ページ分返す。今は見られない配信(非公開・削除・メンバー限定・限定公開)は除く。
  * 配信の ID の一覧を先に 1 ページ分決めてから、そのコメントを読む
  */
 export async function listMorningComments(db: D1Database, q: MorningCommentQuery): Promise<MorningCommentPage> {
@@ -818,9 +819,10 @@ export async function listMorningComments(db: D1Database, q: MorningCommentQuery
     'v.unlisted = 0',
     'v.ended_at IS NOT NULL',
     MORNING_TITLE,
-    'EXISTS (SELECT 1 FROM morning_comments c WHERE c.video_id = v.id)',
+    // 目で確かめて足したボイスがある配信は、保存したコメントが無くても返す
+    '(EXISTS (SELECT 1 FROM morning_comments c WHERE c.video_id = v.id) OR v.id IN (SELECT value FROM json_each(?)))',
   ];
-  const params: (string | number)[] = [];
+  const params: (string | number)[] = [JSON.stringify(Object.keys(MORNING_MANUAL_VOICES))];
   if (q.channelIds.length > 0) {
     where.push(`v.channel_id IN (${placeholders(q.channelIds.length)})`);
     params.push(...q.channelIds);
@@ -853,6 +855,7 @@ export async function listMorningComments(db: D1Database, q: MorningCommentQuery
       comments: comments
         .filter((c) => c.video_id === r.id)
         .map((c) => ({ id: c.comment_id, author: c.author, authorChannelId: c.author_channel_id, text: c.text, likeCount: c.like_count })),
+      manualVoices: [...(MORNING_MANUAL_VOICES[r.id] ?? [])],
     })),
     nextCursor,
   };

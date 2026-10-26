@@ -174,6 +174,18 @@ export interface MorningVideo {
   endedAt: string;
   /** 関連性順(YouTube の並び) */
   comments: MorningComment[];
+  /** 目で確かめて足したボイス(コメントからは「ボイス🎤」の形で読み取れない回の分)。時刻の順 */
+  manualVoices: MorningManualVoice[];
+}
+
+/** 目で確かめて足したボイス 1 つ分(src/worker/morning-manual.ts) */
+export interface MorningManualVoice {
+  /** 配信の中の時刻(HH:MM:SS) */
+  time: string;
+  /** ボイスの名前(タイムスタンプのコメントの行をもとにしたもの) */
+  name: string;
+  /** そのボイスの行があるコメントの id(返信のときは返信の id)。無ければ null */
+  commentId: string | null;
 }
 
 /** /api/morning-comments の 1 ページ */

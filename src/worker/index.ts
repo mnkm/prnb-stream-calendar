@@ -262,7 +262,8 @@ function parseMorningCommentQuery(c: Context): MorningCommentQuery {
 
 /**
  * 朝活の配信(タイトルに「朝活」があるもの)のコメントのうち、ボイスや今日の質問のタイムスタンプを含むもの
- * (選び方は src/shared/morning.ts)。そういうコメントがある配信だけを、新しい順に返す。
+ * (選び方は src/shared/morning.ts)と、目で確かめて足したボイス(src/worker/morning-manual.ts)。
+ * そういうコメントか足したボイスがある配信だけを、新しい順に返す。
  * channels で絞り込み、limit(1〜50、既定 50)本ずつ返し、続きは cursor に nextCursor を渡して取る。
  * コメントは配信終了から 30 日後まで取り直すので、少し古くても困らない
  */
