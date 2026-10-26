@@ -6,6 +6,7 @@ import {
   pickMarkedSetlistComment,
   pickSetlistComment,
 } from '../shared/setlist';
+import { hasMorningStamp } from '../shared/morning';
 import { type SetlistProblem, auditSetlist, problemSignature } from '../shared/setlist-audit';
 import type { LiveStatus } from '../shared/types';
 import { RequestBudget, RequestBudgetExceededError, countD1 } from './budget';
@@ -23,6 +24,8 @@ import {
   fillSearchTitles,
   findActiveLives,
   findLivesToWatch,
+  MORNING_MAX_PER_VIDEO,
+  findMorningTargets,
   hasRecentUpload,
   findAvailabilityTargets,
   findPendingPlaylist,
@@ -46,6 +49,7 @@ import {
   playlistItemsPageStmts,
   readTwitchState,
   saveBackfillProgress,
+  saveMorningCheckStmts,
   saveScanProgress,
   saveSetlistAuditStmts,
   saveSetlistSongsStmt,
@@ -144,6 +148,21 @@ const SETLIST_AUDITS_PER_RUN = 50;
 const SETLIST_AUDIT_NOTIFY_HOUR_JST = 9;
 /** 1 つの Issue に載せる歌枠の数の上限(残りは次の日に回す) */
 const SETLIST_AUDITS_PER_ISSUE = 20;
+/**
+ * 1 回の実行でコメントを確認する朝活の配信の数。まだ確認していない過去の配信も、これで少しずつ取り込む
+ * (1 時間に 60 本ほど)
+ */
+const MORNING_CHECKS_PER_RUN = 5;
+/**
+ * 朝活の配信のコメントを確認する時刻(配信終了からの時間)。タイムスタンプのコメントは、配信の翌日以降に書かれたり
+ * 書き足されたりすることもあるので、30 日後まで確認する。過去の配信は、最初の確認で予定が終わる
+ */
+const MORNING_CHECK_HOURS = [3, 24, 72, 168, 720];
+/**
+ * 関連性順で確認するコメントの数(1 回に取れる上限)。朝活のコメントは多くても数十件なので、ふつうは全部を見られる。
+ * これより多い配信では、見られなかった分に前に選んだコメントがあるかもしれないので、保存済みを消さない
+ */
+const MORNING_COMMENTS = 100;
 /** 再生リストの一覧を取り直す間隔 */
 const PLAYLISTS_REFRESH_MS = 24 * 60 * 60 * 1000;
 /** 1 回の実行で読む再生リストの中身のページ数(1 ページ = 50 件) */
@@ -259,6 +278,13 @@ export async function syncAll(env: SyncEnv): Promise<ChannelSyncResult[]> {
 
   // 5・6. 残りの予算で、セトリの処理をする(確認・曲の読み取り・点検・通知)
   await runSetlistStages(db, yt, budget, env);
+
+  // 6-2. 残りの予算で、朝活の配信のコメントから、ボイスや今日の質問のタイムスタンプを含むものを取り込む
+  try {
+    await checkMorningComments(db, yt, budget);
+  } catch (err) {
+    console.error('checkMorningComments failed', err);
+  }
 
   // 7. 残りの予算で、再生リストの一覧(1 日 1 回)と、本数が変わった再生リストの中身を読む
   try {
@@ -879,6 +905,61 @@ async function checkSetlists(db: D1Database, yt: YouTubeClient, budget: RequestB
 }
 
 /**
+ * 朝活の配信(タイトルに「朝活」があるもの)のコメントを確認し、ボイスや今日の質問のタイムスタンプを含むもの
+ * (hasMorningStamp)を保存する。配信終了から MORNING_CHECK_HOURS の時刻に確認し、コメントを全部見られたときは
+ * 今回選んだものに入れ替える(見られなかったときは書き足すだけにする。saveMorningCheckStmts)。
+ * まだ一度も確認していない過去の配信は、新しいものから順に 1 回ずつ確認する
+ */
+async function checkMorningComments(db: D1Database, yt: YouTubeClient, budget: RequestBudget) {
+  // 対象の読み取り 1 回 + 書き込み 1 回 + 1 本以上の確認が入らなければ、次回に回す
+  if (budget.remaining < 3) return;
+  const now = new Date();
+  const targets = await findMorningTargets(db, {
+    now: toIsoSeconds(now),
+    firstBefore: isoBefore(now, MORNING_CHECK_HOURS[0] * 3600_000),
+    limit: MORNING_CHECKS_PER_RUN,
+  });
+
+  const stmts: D1PreparedStatement[] = [];
+  for (const target of targets) {
+    if (budget.remaining <= 1) break; // 最後の書き込みの分を残す
+    const checkedAt = toIsoSeconds(now);
+    let comments: YtComment[] | null;
+    try {
+      comments = await yt.getTopComments(target.id, MORNING_COMMENTS);
+    } catch (err) {
+      console.warn(`morning comments check failed for ${target.id}`, err);
+      // ほかの動画でも同じように失敗するときは、ここまでの結果だけ保存する
+      if (!isVideoSpecificError(err)) break;
+      // この動画だけの失敗は、保存済みのものを残して、次の確認日時まで後回しにする
+      stmts.push(
+        ...saveMorningCheckStmts(db, {
+          videoId: target.id,
+          comments: null,
+          complete: false,
+          checkedAt,
+          nextCheckAt: nextSetlistCheck(target.ended_at, now, MORNING_CHECK_HOURS),
+        }),
+      );
+      continue;
+    }
+    const picked = comments?.filter((c) => hasMorningStamp(c.text));
+    stmts.push(
+      ...saveMorningCheckStmts(db, {
+        videoId: target.id,
+        // コメントが無効・動画が見つからない(null)ときは、保存済みのものを残す(一時的に非公開になっただけかもしれない)。
+        // 確認は予定どおり続ける(回数が決まっているので、続けてもクォータはほとんど増えない)
+        comments: picked ? picked.slice(0, MORNING_MAX_PER_VIDEO) : null,
+        complete: comments !== null && comments.length < MORNING_COMMENTS && picked!.length <= MORNING_MAX_PER_VIDEO,
+        checkedAt,
+        nextCheckAt: nextSetlistCheck(target.ended_at, now, MORNING_CHECK_HOURS),
+      }),
+    );
+  }
+  await writeBatch(db, stmts);
+}
+
+/**
  * 返信の取得の失敗が、そのコメントの返信だけのものか(応答が大きすぎる、返信が取れない 4xx)。
  * コメントの一覧は直前に取れているので、クォータ超過・回数制限・サーバー側のエラー以外は、ほかの歌枠には関係しない。
  * 何も書かずに止めると、その歌枠が毎回先頭に来て、同じところで止まり続ける
@@ -917,7 +998,7 @@ function isVideoSpecificError(err: unknown) {
   return err instanceof YouTubeApiError && err.status === 403 && /"reason":\s*"forbidden"/.test(err.message);
 }
 
-/** 次にセトリを確認する日時。配信終了から 7 日を過ぎていれば null(確認をやめる) */
+/** 次にセトリ(または朝活のコメント)を確認する日時。checkHours の最後の時刻を過ぎていれば null(確認をやめる) */
 function nextSetlistCheck(endedAt: string, now: Date, checkHours: number[]): string | null {
   const ended = Date.parse(endedAt);
   const next = checkHours.map((h) => ended + h * 3600_000).find((t) => t > now.getTime());

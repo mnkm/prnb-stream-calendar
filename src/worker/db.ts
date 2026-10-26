@@ -10,6 +10,7 @@ import type {
   LiveStatus,
   MatchedSong,
   MembersFilter,
+  MorningCommentPage,
   Platform,
   Playlist,
   PlaylistDetail,
@@ -445,7 +446,7 @@ export interface SearchQuery {
 }
 
 // ページの区切り。event_at は固定長の ISO 8601、動画 ID に ~ は含まれない
-const encodeCursor = (row: VideoRow) => `${row.event_at}~${row.id}`;
+const encodeCursor = (row: Pick<VideoRow, 'event_at' | 'id'>) => `${row.event_at}~${row.id}`;
 function decodeCursor(cursor: string): { eventAt: string; id: string } | null {
   const at = cursor.indexOf('~');
   return at > 0 ? { eventAt: cursor.slice(0, at), id: cursor.slice(at + 1) } : null;
@@ -463,7 +464,7 @@ function addCursorCondition(where: string[], params: (string | number)[], cursor
 }
 
 /** limit + 1 件読んだ結果を、1 ページ分と、続きがあるか(次のページの cursor)に分ける */
-function splitPage<T extends VideoRow>(results: T[], limit: number): { rows: T[]; nextCursor: string | null } {
+function splitPage<T extends Pick<VideoRow, 'event_at' | 'id'>>(results: T[], limit: number): { rows: T[]; nextCursor: string | null } {
   const rows = results.slice(0, limit);
   return { rows, nextCursor: results.length > limit ? encodeCursor(rows[rows.length - 1]) : null };
 }
@@ -712,6 +713,149 @@ export async function getSetlist(db: D1Database, videoId: string): Promise<Setli
     .bind(videoId)
     .first<{ author: string; text: string }>();
   return row ? { author: row.author, text: row.text } : null;
+}
+
+// ---------- 朝活のコメント ----------
+
+/** タイトルで朝活の配信を見分ける条件(v. は videos) */
+const MORNING_TITLE = `v.title LIKE '%朝活%'`;
+
+/**
+ * コメントを確認する朝活の配信。次の確認の日時を過ぎたものと、まだ一度も確認していないもの(過去の配信の取り込み)を、
+ * 新しい順に。まだ一度も確認していないものは、配信終了から firstAfter 以上たったものだけ
+ */
+export async function findMorningTargets(db: D1Database, q: { now: string; firstBefore: string; limit: number }) {
+  const { results } = await db
+    .prepare(
+      `SELECT v.id, v.ended_at
+         FROM videos v LEFT JOIN morning_checks m ON m.video_id = v.id
+        WHERE v.platform = 'youtube' AND v.type = 'live' AND v.live_status = 'ended' AND v.members_only = 0
+          AND v.unlisted = 0 AND v.ended_at IS NOT NULL AND v.unavailable_at IS NULL AND ${MORNING_TITLE}
+          AND ((m.video_id IS NULL AND v.ended_at <= ?1) OR m.next_check_at <= ?2)
+        ORDER BY v.ended_at DESC
+        LIMIT ?3`,
+    )
+    .bind(q.firstBefore, q.now, q.limit)
+    .all<{ id: string; ended_at: string }>();
+  return results;
+}
+
+/** 1 本の配信で保存するコメントの数の上限(実際は 1〜2 件。1 件ごとに書き込みの文が 1 つ増える) */
+export const MORNING_MAX_PER_VIDEO = 10;
+
+export interface MorningCheckResult {
+  videoId: string;
+  /** 選んだコメント(関連性順)。null なら、今回は読めなかったので保存済みのものを残す */
+  comments: { id: string; author: string; authorChannelId: string | null; text: string; likeCount: number }[] | null;
+  /**
+   * 配信のコメントを全部見られたか。見られたときだけ、保存済みのうち今回選ばなかったものを消す
+   * (見られなかった分に、前に選んだコメントが残っているかもしれないので)
+   */
+  complete: boolean;
+  checkedAt: string;
+  nextCheckAt: string | null;
+}
+
+/**
+ * 確認の結果を保存する。コメントが読めたときは、今回選んだものを書き込む。全部見られたときは、その配信の分を
+ * 今回選んだものに入れ替える(消された・書き直されたものを反映する)
+ */
+export function saveMorningCheckStmts(db: D1Database, r: MorningCheckResult): D1PreparedStatement[] {
+  const stmts: D1PreparedStatement[] = [];
+  if (r.comments) {
+    if (r.complete) stmts.push(db.prepare('DELETE FROM morning_comments WHERE video_id = ?').bind(r.videoId));
+    r.comments.forEach((c, i) =>
+      stmts.push(
+        db
+          .prepare(
+            `INSERT INTO morning_comments (comment_id, video_id, author, author_channel_id, text, like_count, position)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (comment_id) DO UPDATE SET video_id = excluded.video_id, author = excluded.author,
+               author_channel_id = excluded.author_channel_id, text = excluded.text,
+               like_count = excluded.like_count, position = excluded.position`,
+          )
+          .bind(c.id, r.videoId, c.author, c.authorChannelId, c.text, c.likeCount, i),
+      ),
+    );
+  }
+  if (r.comments && !r.complete) {
+    // 書き足したときは、関連性順で上のものから上限の数までを残す(確認のたびに違うコメントが選ばれても増え続けないように)
+    stmts.push(
+      db
+        .prepare(
+          `DELETE FROM morning_comments WHERE video_id = ?1 AND comment_id NOT IN (
+             SELECT comment_id FROM morning_comments WHERE video_id = ?1 ORDER BY position, comment_id LIMIT ?2)`,
+        )
+        .bind(r.videoId, MORNING_MAX_PER_VIDEO),
+    );
+  }
+  stmts.push(
+    db
+      .prepare(
+        `INSERT INTO morning_checks (video_id, checked_at, next_check_at) VALUES (?, ?, ?)
+         ON CONFLICT (video_id) DO UPDATE SET checked_at = excluded.checked_at, next_check_at = excluded.next_check_at`,
+      )
+      .bind(r.videoId, r.checkedAt, r.nextCheckAt),
+  );
+  return stmts;
+}
+
+export interface MorningCommentQuery {
+  channelIds: string[];
+  cursor: string | null;
+  limit: number;
+}
+
+/**
+ * 選んだコメントがある朝活の配信を、新しい順に 1 ページ分返す。今は見られない配信(非公開・削除・メンバー限定・限定公開)は除く。
+ * 配信の ID の一覧を先に 1 ページ分決めてから、そのコメントを読む
+ */
+export async function listMorningComments(db: D1Database, q: MorningCommentQuery): Promise<MorningCommentPage> {
+  const where = [
+    `v.platform = 'youtube'`,
+    'v.unavailable_at IS NULL',
+    'v.members_only = 0',
+    'v.unlisted = 0',
+    'v.ended_at IS NOT NULL',
+    MORNING_TITLE,
+    'EXISTS (SELECT 1 FROM morning_comments c WHERE c.video_id = v.id)',
+  ];
+  const params: (string | number)[] = [];
+  if (q.channelIds.length > 0) {
+    where.push(`v.channel_id IN (${placeholders(q.channelIds.length)})`);
+    params.push(...q.channelIds);
+  }
+  addCursorCondition(where, params, q.cursor, 'v.');
+  const page = await db
+    .prepare(
+      `SELECT v.id, v.channel_id, v.title, v.event_at, v.ended_at FROM videos v
+        WHERE ${where.join(' AND ')} ORDER BY v.event_at DESC, v.id DESC LIMIT ?`,
+    )
+    .bind(...params, q.limit + 1)
+    .all<{ id: string; channel_id: string; title: string; event_at: string; ended_at: string }>();
+  const { rows, nextCursor } = splitPage(page.results, q.limit);
+  if (rows.length === 0) return { videos: [], nextCursor: null };
+
+  const { results: comments } = await db
+    .prepare(
+      `SELECT comment_id, video_id, author, author_channel_id, text, like_count FROM morning_comments
+        WHERE video_id IN (${placeholders(rows.length)}) ORDER BY video_id, position, comment_id`,
+    )
+    .bind(...rows.map((r) => r.id))
+    .all<{ comment_id: string; video_id: string; author: string; author_channel_id: string | null; text: string; like_count: number }>();
+  return {
+    videos: rows.map((r) => ({
+      videoId: r.id,
+      channelId: r.channel_id,
+      title: r.title,
+      eventAt: r.event_at,
+      endedAt: r.ended_at,
+      comments: comments
+        .filter((c) => c.video_id === r.id)
+        .map((c) => ({ id: c.comment_id, author: c.author, authorChannelId: c.author_channel_id, text: c.text, likeCount: c.like_count })),
+    })),
+    nextCursor,
+  };
 }
 
 // ---------- セトリの点検 ----------
