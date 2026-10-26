@@ -6,7 +6,7 @@ import {
   pickMarkedSetlistComment,
   pickSetlistComment,
 } from '../shared/setlist';
-import { hasMorningStamp } from '../shared/morning';
+import { hasMorningStamp, hasTimes, mergeMorningReplies } from '../shared/morning';
 import { type SetlistProblem, auditSetlist, problemSignature } from '../shared/setlist-audit';
 import type { LiveStatus } from '../shared/types';
 import { RequestBudget, RequestBudgetExceededError, countD1 } from './budget';
@@ -73,6 +73,7 @@ import {
   SHORTS_MAX_DURATION_SEC,
   type YtChannel,
   type YtComment,
+  type YtCommentWithReplies,
   type YtVideo,
   ResponseTooLargeError,
   YouTubeApiError,
@@ -122,6 +123,13 @@ const PAGE_REQUESTS = 3;
 const BACKFILL_PAGES_PER_RUN = 8;
 /** 1 回の実行で search_title を埋める件数 */
 const SEARCH_TITLE_FILL_PER_RUN = 1000;
+/** 朝活のコメントの返信を取り足す(付いてきた返信だけでは足りない)ときに取る返信の数(comments.list で 1 回に取れる上限) */
+const MORNING_REPLIES = 100;
+/**
+ * 1 本の配信で返信を取り足す回数の上限(1 回 1 unit)。誰でも条件に合うコメントを並べられるので、
+ * 1 本の確認で予算を使い切らないようにする(実際の朝活では、取り足しが要るコメントは無かった)
+ */
+const MORNING_REPLY_FETCHES_PER_VIDEO = 3;
 /** 1 回の実行でセトリを確認する配信の数 */
 const SETLIST_CHECKS_PER_RUN = 10;
 /**
@@ -924,9 +932,23 @@ async function checkMorningComments(db: D1Database, yt: YouTubeClient, budget: R
   for (const target of targets) {
     if (budget.remaining <= 1) break; // 最後の書き込みの分を残す
     const checkedAt = toIsoSeconds(now);
-    let comments: YtComment[] | null;
+    let comments: YtCommentWithReplies[] | null;
+    let result: Awaited<ReturnType<typeof pickMorningComments>> | null = null;
     try {
-      comments = await yt.getTopComments(target.id, MORNING_COMMENTS);
+      let withReplies = true;
+      try {
+        comments = await yt.getCommentThreads(target.id, MORNING_COMMENTS);
+      } catch (err) {
+        // 返信込みの応答が大きすぎる(長い返信を書き込まれた)ときは、返信なしで取り直す
+        if (!(err instanceof ResponseTooLargeError)) throw err;
+        console.warn(`morning comment threads too large for ${target.id}`, err);
+        const top = await yt.getTopComments(target.id, MORNING_COMMENTS);
+        comments = top && top.map((c) => ({ ...c, replies: [] }));
+        withReplies = false;
+      }
+      if (comments) result = await pickMorningComments(yt, budget, comments);
+      // 返信を読めなかったので、保存済みを消す入れ替えはしない
+      if (result && !withReplies) result.repliesComplete = false;
     } catch (err) {
       console.warn(`morning comments check failed for ${target.id}`, err);
       // ほかの動画でも同じように失敗するときは、ここまでの結果だけ保存する
@@ -943,20 +965,57 @@ async function checkMorningComments(db: D1Database, yt: YouTubeClient, budget: R
       );
       continue;
     }
-    const picked = comments?.filter((c) => hasMorningStamp(c.text));
     stmts.push(
       ...saveMorningCheckStmts(db, {
         videoId: target.id,
         // コメントが無効・動画が見つからない(null)ときは、保存済みのものを残す(一時的に非公開になっただけかもしれない)。
         // 確認は予定どおり続ける(回数が決まっているので、続けてもクォータはほとんど増えない)
-        comments: picked ? picked.slice(0, MORNING_MAX_PER_VIDEO) : null,
-        complete: comments !== null && comments.length < MORNING_COMMENTS && picked!.length <= MORNING_MAX_PER_VIDEO,
+        comments: result ? result.picked.slice(0, MORNING_MAX_PER_VIDEO) : null,
+        // 全部見られたか: コメントが 100 件未満で、返信を読み残しておらず、選んだものが上限以下
+        complete:
+          result !== null && comments!.length < MORNING_COMMENTS && result.repliesComplete && result.picked.length <= MORNING_MAX_PER_VIDEO,
         checkedAt,
         nextCheckAt: nextSetlistCheck(target.ended_at, now, MORNING_CHECK_HOURS),
       }),
     );
   }
   await writeBatch(db, stmts);
+}
+
+/**
+ * 朝活のコメントから、ボイスや今日の質問のタイムスタンプを含むものを選ぶ。同じ書き手が返信に続きを書いていれば、
+ * つなげてから選び、つなげたものを保存する。付いてきた返信(多くて 5 件ほど)で全部でなければ、本体か付いてきた
+ * 自分の返信に時刻の行があるコメントだけ、残りを取り足す(1 件 1 unit、1 本の配信で MORNING_REPLY_FETCHES_PER_VIDEO 回まで)。
+ * 返信を読み残したコメントが 1 つでもあれば、repliesComplete を false にする(保存済みを消す入れ替えをしない)
+ */
+async function pickMorningComments(yt: YouTubeClient, budget: RequestBudget, comments: YtCommentWithReplies[]) {
+  const picked = [];
+  let repliesComplete = true;
+  let fetches = 0;
+  for (const c of comments) {
+    let replies = c.replies;
+    const partial = c.replyCount > replies.length && c.authorChannelId !== null;
+    const timed = hasTimes(c.text) || replies.some((r) => r.authorChannelId === c.authorChannelId && hasTimes(r.text));
+    if (partial && timed && fetches < MORNING_REPLY_FETCHES_PER_VIDEO && budget.remaining > 1) {
+      fetches++;
+      try {
+        replies = await yt.getReplies(c.id, MORNING_REPLIES);
+        // 1 回で取れる上限を超える返信は、続きを読まない
+        if (c.replyCount > MORNING_REPLIES) repliesComplete = false;
+      } catch (err) {
+        // そのコメントの返信だけが取れないときは、付いてきた返信だけで考える
+        if (!isReplySpecificError(err)) throw err;
+        console.warn(`morning replies unreadable for ${c.id}`, err);
+        repliesComplete = false;
+      }
+    } else if (partial) {
+      // 取り足さなかった返信に、続きが書かれているかもしれない
+      repliesComplete = false;
+    }
+    const text = mergeMorningReplies(c, replies);
+    if (hasMorningStamp(text)) picked.push({ id: c.id, author: c.author, authorChannelId: c.authorChannelId, text, likeCount: c.likeCount });
+  }
+  return { picked, repliesComplete };
 }
 
 /**
