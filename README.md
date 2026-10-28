@@ -536,6 +536,10 @@ npm run deploy
 
 マイグレーションは列の追加だけにしておくと、新しいコードのデプロイ前に反映しても、動いている本番に影響しません。データを書き換えるマイグレーション(`0017_recheck_split_setlists.sql` のように、新しいコードの動きを前提にしたもの)は、**新しいコードをデプロイしたあとに** 反映してください。
 
+### 依存パッケージの固定(overrides)
+
+`package.json` の `overrides` で、`undici` を `^7.30.1` に固定しています。開発用の `@cloudflare/vite-plugin` が使う `miniflare` が、脆弱性(GHSA-xjj6-f33q-929c など)のある `undici` 7.29.1 を固定で入れているためです。`undici` は開発サーバーだけで使われ、本番の Worker には入りません。`npm ls undici --all` で、`miniflare` が自分で 7.30.1 以上を要求するようになったと分かったら、この `overrides` を消してください。
+
 ### Cron(同期の間隔)を変えるとき
 
 GitHub 連携の自動デプロイでは、コードは更新されても **Cron の設定は本番に反映されません**。`wrangler.jsonc` の `triggers.crons` を変えて `main` に取り込んだあと、プロジェクトのフォルダで次を実行してください。
