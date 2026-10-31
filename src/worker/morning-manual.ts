@@ -7,7 +7,7 @@ import type { MorningManualVoice } from '../shared/types';
  * 2026-10 に公開の朝活 501 本を調べ、「ボイス🎤」の行が無かった 212 本をユーザーが目で確かめた結果で、
  * 「1回目🎤（エコーなし）」のように回数で書かれた行や、🎤 の無い行などがここに入る。
  * ここに無い残りの回は、ボイスが無いことを確かめたもの。
- * /api/morning-comments の manualVoices で返す(README の「朝活のコメント」)。
+ * /api/morning-comments の manualVoices で返す(docs/details.md の「朝活のコメント」)。
  */
 export const MORNING_MANUAL_VOICES: Readonly<Record<string, readonly MorningManualVoice[]>> = {
   // 2025-07-07
