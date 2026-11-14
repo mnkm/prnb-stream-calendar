@@ -840,8 +840,8 @@ async function twitchArchiveStmts(
  * セトリらしい書き方で曲として読めるコメントだけを保存する(pickMarkedSetlistComment)
  */
 async function checkSetlists(db: D1Database, yt: YouTubeClient, budget: RequestBudget) {
-  // 対象の読み取り 1 回 + 書き込み 1 回 + 1 本以上の確認が入らなければ、次回に回す
-  if (budget.remaining < 4) return;
+  // 対象の読み取り 1 回 + タイトルの取り直し 1 回 + 書き込み 1 回 + 1 本以上の確認が入らなければ、次回に回す
+  if (budget.remaining < 5) return;
   const now = new Date();
   const hoursAgo = (hours: number) => isoBefore(now, hours * 3600_000);
   const targets = await findSetlistTargets(db, {
@@ -853,6 +853,24 @@ async function checkSetlists(db: D1Database, yt: YouTubeClient, budget: RequestB
   });
 
   const stmts: D1PreparedStatement[] = [];
+  // 終わったあとにタイトルを変える配信がある(歌枠から雑談に変えたなど)。全体の同期は配信中と配信予定だけを取り直すので、
+  // 確認する配信のタイトルをここで取り直し、歌枠かどうかを今のタイトルで決める(10 本まで 1 unit)。
+  // 点検(auditSetlists)も保存したタイトルで歌枠かどうかを決めるので、取り直したものは保存する
+  if (targets.length > 0) {
+    try {
+      const videos = await yt.getVideos(targets.map((t) => t.id));
+      const titles = new Map(videos.map((v) => [v.id, v.snippet.title]));
+      for (const target of targets) {
+        const title = titles.get(target.id);
+        if (title !== undefined) target.is_utawaku = title.includes('歌枠') ? 1 : 0;
+      }
+      stmts.push(...upsertVideoStmts(db, videos.map((v) => toVideoRow(v, false, false)), nowIso()));
+    } catch (err) {
+      // 取り直せなかったときは、保存してあるタイトルのまま確認する(予算切れは、このあとの確認でも同じなので止める)
+      if (err instanceof RequestBudgetExceededError) return;
+      console.warn('setlist target titles refresh failed', err);
+    }
+  }
   for (const target of targets) {
     if (budget.remaining <= 1) break; // 最後の書き込みの分を残す
     const checkHours = target.is_utawaku ? SETLIST_CHECK_HOURS : SETLIST_CHECK_HOURS_OTHER;
