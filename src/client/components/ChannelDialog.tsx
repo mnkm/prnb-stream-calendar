@@ -238,17 +238,20 @@ function CalendarSubscribe({ feedKey, label, className }: { feedKey: string; lab
   const httpsUrl = new URL(`api/ical/${feedKey}.ics`, document.baseURI).href;
   const webcalUrl = httpsUrl.replace(/^https?:/, 'webcal:');
   const googleUrl = `https://calendar.google.com/calendar/render?${new URLSearchParams({ cid: webcalUrl })}`;
-  const [copied, setCopied] = useState(false);
+  // コピーの結果(2 秒だけボタンに出す)。失敗したとき(クリップボードを使えない環境など)は、URL を選べる形で出す
+  const [copied, setCopied] = useState<'done' | 'failed' | null>(null);
   useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 2000);
+    if (copied !== 'done') return;
+    const timer = setTimeout(() => setCopied(null), 2000);
     return () => clearTimeout(timer);
   }, [copied]);
   const copy = () => {
-    navigator.clipboard.writeText(httpsUrl).then(
-      () => setCopied(true),
-      () => setCopied(false),
-    );
+    Promise.resolve()
+      .then(() => navigator.clipboard.writeText(httpsUrl))
+      .then(
+        () => setCopied('done'),
+        () => setCopied('failed'),
+      );
   };
   const button =
     'flex items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-xs font-medium whitespace-nowrap transition hover:bg-ink/5';
@@ -267,10 +270,16 @@ function CalendarSubscribe({ feedKey, label, className }: { feedKey: string; lab
           Google カレンダーに追加
         </a>
         <button type="button" onClick={copy} className={button}>
-          {copied ? <Check className="size-3.5" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
-          {copied ? 'コピーしました' : 'URL をコピー'}
+          {copied === 'done' ? <Check className="size-3.5" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
+          {copied === 'done' ? 'コピーしました' : 'URL をコピー'}
         </button>
       </div>
+      {copied === 'failed' && (
+        <p className="flex flex-col gap-1 text-xs text-muted">
+          コピーできませんでした。次の URL を選んでコピーしてください。
+          <span className="select-all break-all text-ink">{httpsUrl}</span>
+        </p>
+      )}
       <p className="text-xs leading-relaxed text-muted">
         YouTube のライブとプレミア公開の予定が入ります(過去 30 日から 60 日先まで)。Google
         カレンダーは、予定の変更が反映されるまで半日から 1 日ほどかかることがあります。

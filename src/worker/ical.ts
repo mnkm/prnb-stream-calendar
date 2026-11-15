@@ -49,7 +49,8 @@ function eventLines(event: IcalEventRow, now: Date): string[] {
     'BEGIN:VEVENT',
     // 同じ配信の予定が変わったとき(枠の時刻の変更など)、アプリが同じ予定として置き換えられるよう、動画の ID から作る
     `UID:${event.id}@mnkm.page`,
-    `DTSTAMP:${formatUtc(new Date(event.updated_at))}`,
+    // DTSTAMP は、METHOD を書いたカレンダーでは、このデータを作った日時(RFC 5545 3.8.7.2)。予定が変わった日時は LAST-MODIFIED に書く
+    `DTSTAMP:${formatUtc(now)}`,
     `LAST-MODIFIED:${formatUtc(new Date(event.updated_at))}`,
     `DTSTART:${formatUtc(start)}`,
     `DTEND:${formatUtc(endOf(event, start, now))}`,
