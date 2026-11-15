@@ -680,15 +680,15 @@ export async function getSongHistory(db: D1Database, channelId: string, now: Dat
     for (const song of songs) {
       const key = songKey(song.title);
       if (!key) continue;
-      const performance = { videoId: row.id, time: song.time ?? null };
+      const performance = { videoId: row.id, time: song.time ?? null, artist: song.artist ?? null };
       streams[row.id] ??= { title: row.title, eventAt: row.event_at };
       const entry = byKey.get(key);
       // 配信は新しい順に読むので、最初に見つけた回が、いちばん新しい回
       if (!entry) {
-        byKey.set(key, { title: song.title, artist: song.artist, key, count: 1, lastAt: row.event_at, performances: [performance] });
+        byKey.set(key, { title: song.title, artist: song.artist ?? null, key, count: 1, lastAt: row.event_at, performances: [performance] });
       } else {
         entry.count += 1;
-        entry.artist ??= song.artist;
+        entry.artist ??= song.artist ?? null;
         entry.performances.push(performance);
       }
     }
