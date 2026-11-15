@@ -53,14 +53,36 @@ const TIME_SOURCE = String.raw`(?<![\d:])(\d{1,2}):(\d{2})(?::(\d{2}))?(?![\d:])
 const TIME_GLOBAL = new RegExp(TIME_SOURCE, 'g');
 const TIME_ONCE = new RegExp(TIME_SOURCE);
 
-/** 曲番号: 「No.16 」「No.01 /」「01.」「01．」「【01】」「M3 」 */
-const NUMBER = /^(?:No\.?|M)\s*(\d{1,3})(?:\s*[.．:：)）/／]\s*|\s+)|^(\d{1,3})\s*[.．:：)）]\s*|^【(\d{1,3})】\s*/i;
+/** 曲番号: 「No.16 」「No.01 /」「01.」「01．」「【01】」「M3 」「1曲目」「①」(①〜⑳) */
+const NUMBER = /^(?:No\.?|M)\s*(\d{1,3})(?:\s*[.．:：)）/／]\s*|\s+)|^(\d{1,3})\s*[.．:：)）]\s*|^【(\d{1,3})】\s*|^(\d{1,3})曲目\s*|^([①-⑳])\s*/i;
+/** NUMBER に当たった番号を数にする */
+const numberOf = (n: RegExpMatchArray) =>
+  n[5] ? n[5].charCodeAt(0) - 0x2460 + 1 : Number(n[1] ?? n[2] ?? n[3] ?? n[4]);
+/** アンコールの印(「EN」「EN1」〜)。「ENDLESS」のような曲名は、印のあとに空白か記号が無いので当たらない */
+const ENCORE = /^EN\d{0,2}(?:[.．:：)）]\s*|\s+)/;
+/**
+ * 「1曲目「しゅきぴ／=LOVE」take2」のように、曲名とアーティストを「」でくくったもの。くくりの外は補足として捨てる。
+ * くくりの中に区切りがあり、外に区切りが無いときだけ使う(「「ハロ/ハワユ」 / ナノウ」の外のアーティストを消さないため)。
+ * 中身を取り出してから区切りを調べる(1 つの正規表現で調べると、閉じの「」」が無いときに 2 乗の時間がかかる)
+ */
+const QUOTED = /^「([^「」]*)」/;
+const QUOTED_SEPARATOR = /[/／]|\s[-‐‑–—―]\s/;
+/** 曲名に「/」を含む曲。「/」の全角・半角や前後の空白の有無によらず、曲名として読む(区切りと取り違えるため)。曲名は書かれたままにする */
+const SLASH_TITLES = ['ハロ/ハワユ', 'W/X/Y'];
+const SLASH_TITLE_PATTERNS = SLASH_TITLES.map((title) => ({
+  pattern: new RegExp(
+    `^(${title.split('/').join('[ \t　]*[/／][ \t　]*')})(?:[ \t　]*(?:[/／]|[-‐‑–—―])[ \t　]*|[ \t　]*$)`,
+    'i',
+  ),
+}));
+/** 文字の向きを指定する見えない文字(U+200E など)と、幅の無い空白(U+200B・U+FEFF)。曲名の先頭に紛れ込むので除く */
+const INVISIBLE = /[\u200B\u200E\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
 /** 曲名とアーティストの区切り。コメントの中で多く使われているものから試す */
 const SEPARATORS = [/／/g, /(?<!\s)\s+\/+\s*/g, /\//g, /(?<!\s)\s+[-‐‑–—―]+\s*/g];
 /** 曲名の前後に付く記号(行頭の区切り・矢印・絵文字など) */
 const LEADING = /^(?:[\s　]|[/／～~\-‐)）▶►・=＝]|[\p{Extended_Pictographic}‍️♪♫])+/u;
 /** 曲以外の時刻なのに「曲名/英語」の形で書かれやすいもの */
-const NOT_SONG = /^(?:配信開始|配信終了|開始|終了|告知|宣伝|告知・宣伝|エンディング|オープニング|OP|ED|自己紹介|乾杯|休憩)$/i;
+const NOT_SONG = /^(?:配信開始|配信終了|開始|終了|告知|宣伝|告知・宣伝|エンディング|オープニング|OP|ED|自己紹介|乾杯|休憩|MC|トーク|OPトーク|EDトーク)$/i;
 /** セトリの見出し(曲名だけのセトリを読むときの目印)。文中の「セトリ」ではなく、行の先頭にあるものだけ */
 const SETLIST_HEADING = /^[^\p{L}\p{N}]*(?:セトリ|セットリスト|set\s*list|songs?\s*list)/iu;
 /** 曲名だけのセトリで除く挨拶(「こんにな～」「おつひな」「せーの!」など) */
@@ -182,6 +204,10 @@ const knownArtist = (title: string) => {
 
 /** 曲名とアーティストに分ける。「3/30」「12／28」のように数字にはさまれた区切りは日付なので使わない */
 function splitTitleArtist(text: string, separators: RegExp[]) {
+  for (const { pattern } of SLASH_TITLE_PATTERNS) {
+    const m = text.match(pattern);
+    if (m) return { title: m[1], artist: text.slice(m[0].length).trim() };
+  }
   for (const sep of separators) {
     for (const m of text.matchAll(sep)) {
       const at = m.index ?? 0;
@@ -197,10 +223,15 @@ function splitTitleArtist(text: string, separators: RegExp[]) {
 /** 行頭の記号と曲番号を外す */
 function stripLead(text: string): { no: number | null; rest: string } {
   let rest = text.replace(LEADING, '');
+  // アンコールの印は番号として使わない(本編の番号と重なるため)
+  const encore = rest.match(ENCORE);
+  if (encore) rest = rest.slice(encore[0].length).replace(LEADING, '');
+  // 印のあとに番号が続くとき(「EN 03. 曲」)も、番号は外して使わない
   const n = rest.match(NUMBER);
-  if (!n) return { no: null, rest };
-  rest = rest.slice(n[0].length).replace(LEADING, '');
-  return { no: Number(n[1] ?? n[2] ?? n[3]), rest };
+  if (n) rest = rest.slice(n[0].length).replace(LEADING, '');
+  const quoted = rest.match(QUOTED);
+  if (quoted && QUOTED_SEPARATOR.test(quoted[1]) && !QUOTED_SEPARATOR.test(rest.slice(quoted[0].length))) rest = quoted[1].trim();
+  return { no: n && !encore ? numberOf(n) : null, rest };
 }
 
 /** 補足(リクエストした人・発売日・作品名)を外す */
@@ -277,6 +308,17 @@ const readSong = (rest: string, separators: RegExp[], commaMode: boolean) => rea
 /** readSong の、補足を外したあと(stripNotes を通した文字列)から読む部分 */
 function readSongText(text: string, separators: RegExp[], commaMode: boolean): { title: string; artist: string | null } | null {
   if (!text || /^\d+番手/.test(text)) return null; // 歌枠リレーの出演順
+  // 「|| Senbonzakura / 千本桜」: ローマ字の曲名 / 元の曲名。アーティストは書かれていない。
+  // 「/」の左がローマ字(ASCII だけ)のときと、区切りの無いもの(「|| LOVE! THUNDER GLOW」)だけ。ほかは普通に読む
+  if (/^[|｜]{2}/.test(text)) {
+    const body = text.slice(2).trim();
+    const pair = splitTitleArtist(body, separators);
+    if (!pair || /^[\x20-\x7E]+$/.test(pair.title)) {
+      const title = cleanTail(pair ? pair.artist : body);
+      return title && !NOT_SONG.test(title) ? { title, artist: knownArtist(title) } : null;
+    }
+    text = body;
+  }
   if (commaMode && /[,，]/.test(text)) return readCommaSong(text);
   const pair = splitTitleArtist(text, separators);
   if (pair) {
@@ -348,6 +390,9 @@ function readLine(text: string): Line {
   return { text, timed: text ? readTimedLine(text) : null, hasTime: TIME_ONCE.test(text), heading: SETLIST_HEADING.test(text) };
 }
 
+/** 曲紹介・開始・終了の時刻を並べるセトリの、表の見出しの行 */
+const TABLE_HEADER = /曲紹介|曲開始|曲終了|曲情報/;
+
 /** 時刻と時刻のあいだが、範囲や並びを表す記号だけか(「05:52〜10:48」「00:08:23  /  00:09:18  ～  00:14:44」) */
 const TIME_GAP = /^[\s/／～~〜\-‐‑–—―>＞→]*$/;
 
@@ -412,6 +457,10 @@ function keepNoTitles(lines: Line[]) {
   const timed = lines.flatMap((l) => (l.timed ? [l.timed] : []));
   const byNo = timed.filter((t) => t.numberedByNo);
   if (byNo.length === 0 || byNo.length * 2 >= timed.length) return;
+  // 半分に満たなくても、「No.1」「No.2」…と 1 から 1 ずつ増える番号が SETLIST_MIN_SONGS 行以上あれば、番号として読む
+  // (セトリの外に雑談の時刻が多いコメント)。曲名の「No.1」は、1 つのセトリに何度も出てこない
+  const consecutive = byNo.every((t, i) => t.no === i + 1);
+  if (byNo.length >= SETLIST_MIN_SONGS && consecutive) return;
   for (const t of byNo) {
     t.no = null;
     t.body = t.unnumbered;
@@ -423,7 +472,9 @@ function keepNoTitles(lines: Line[]) {
  * 読み取りの規則の版。検索用に、読み取った曲を DB に保存している(setlists.songs)ので、
  * 読み取りの結果が変わるように規則を直したときは、この数を 1 つ増やす(同期のときに全部を読み取り直す)
  */
-export const SETLIST_PARSER_VERSION = 3;
+export const SETLIST_PARSER_VERSION = 4;
+// 4: 「EN1」「①」「1曲目「曲名／アーティスト」」「|| ローマ字 / 曲名」、曲名に「/」を含む曲(SLASH_TITLES)、
+//    「MC / OPトーク」、見えない文字(INVISIBLE)を読めるようにした(楽曲リストとの突き合わせで見つかったもの)
 // 3: 読み取りの規則は 2 と同じ。保存する曲に開始の秒(time)を足したので、保存し直すために上げた(歌唱履歴の集計で使う)
 
 /** 行が、文字より先に時刻で始まるか(「101.9:01:00 ～ 曲/A」「▶05:52〜」。「ありがとう! 0:59 ここ」は違う) */
@@ -479,7 +530,7 @@ export const setlistLineCount = (raw: string) => splitLines(raw.slice(0, MERGED_
 export function parseSetlist(raw: string): SetlistSong[] {
   const lines = splitLines(raw.slice(0, SETLIST_MAX_CHARS))
     .slice(0, SETLIST_MAX_LINES)
-    .map((l) => l.trim())
+    .map((l) => l.replace(INVISIBLE, '').trim())
     .map((l) => readLine(l.length > MAX_LINE_CHARS ? '' : l));
   keepNoTitles(lines);
   const section = setlistSection(lines);
@@ -514,6 +565,8 @@ function readLines(lines: Line[]): Found[] {
       if (last.awaiting) {
         // 「▶05:52〜10:48」の次の行に「🎵1.ミラクル /miwa」
         last.awaiting = false;
+        // 表の見出しの行(「No.  曲紹介等  /  曲開始  ～  曲終了  /  曲情報」)は曲ではない
+        if (TABLE_HEADER.test(text)) return;
         const { no, rest } = stripLead(text);
         const song = readSong(rest, separators, commaMode);
         if (song) {
