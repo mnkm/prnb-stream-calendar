@@ -599,6 +599,54 @@ export async function listVideos(db: D1Database, q: VideoListQuery): Promise<Vid
   return { events: rows.map(toEvent), nextCursor, counts };
 }
 
+/** iCal のフィードに入れる予定の 1 件(ical.ts が VEVENT にする) */
+export interface IcalEventRow {
+  id: string;
+  type: VideoType;
+  live_status: LiveStatus | null;
+  title: string;
+  duration_sec: number | null;
+  event_at: string;
+  ended_at: string | null;
+  updated_at: string;
+  members_only: number;
+  channel_name: string;
+}
+
+/**
+ * iCal のフィードに入れる予定。YouTube のライブ(予定・配信中・終了)とプレミア公開(type = 'video' で live_status があるもの)を、
+ * 開始が from 以上 to 未満のものだけ、古い順に。channelId が null なら有効なチャンネルすべて。
+ * 限定公開と再生できないものは入れない。始まらずに消えた予定枠は、同期のときに行ごと消しているので、ここには出てこない
+ */
+export async function listIcalEvents(db: D1Database, channelId: string | null, from: string, to: string, limit: number) {
+  const where = [
+    `v.platform = 'youtube'`,
+    `(v.type = 'live' OR (v.type = 'video' AND v.live_status IS NOT NULL))`,
+    'v.unavailable_at IS NULL',
+    'v.unlisted = 0',
+    'v.event_at >= ?',
+    'v.event_at < ?',
+    'c.enabled = 1',
+  ];
+  const params: (string | number)[] = [from, to];
+  if (channelId !== null) {
+    where.push('v.channel_id = ?');
+    params.push(channelId);
+  }
+  const { results } = await db
+    .prepare(
+      `SELECT v.id, v.type, v.live_status, v.title, v.duration_sec, v.event_at, v.ended_at, v.updated_at, v.members_only,
+              COALESCE(NULLIF(c.label, ''), NULLIF(c.title, ''), c.id) AS channel_name
+         FROM videos v JOIN channels c ON c.id = v.channel_id
+        WHERE ${where.join(' AND ')}
+        ORDER BY v.event_at, v.id
+        LIMIT ?`,
+    )
+    .bind(...params, limit)
+    .all<IcalEventRow>();
+  return results;
+}
+
 /** 保存してある曲(setlists.songs の JSON)のうち、曲名かアーティストに検索語のどれかを含むもの */
 function matchSongs(songsJson: string, terms: string[]): MatchedSong[] {
   let songs: MatchedSong[];

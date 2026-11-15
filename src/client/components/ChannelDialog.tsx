@@ -1,6 +1,7 @@
 import clsx from 'clsx';
-import { ArrowLeft, ChevronRight } from 'lucide-react';
-import { type CSSProperties, useCallback, useState } from 'react';
+import { ArrowLeft, CalendarPlus, Check, ChevronRight, Copy } from 'lucide-react';
+import { type CSSProperties, useCallback, useEffect, useState } from 'react';
+import { ICAL_ALL_KEY, icalKeyOf } from '../../shared/ical';
 import type { CalendarEvent, Channel } from '../../shared/types';
 import { compactNumber, twitchChannelUrl } from '../lib/format';
 import { TwitchIcon, YouTubeIcon } from './Badges';
@@ -86,6 +87,7 @@ function ChannelList({ channels, onSelect }: { channels: Channel[]; onSelect: (c
           </li>
         ))}
       </ul>
+      <CalendarSubscribe feedKey={ICAL_ALL_KEY} label="すべてのチャンネルの配信予定" className="mt-4" />
     </div>
   );
 }
@@ -107,6 +109,7 @@ function ChannelProfile({
     ['playlists', '再生リスト'],
     ...(channel.twitchLogin ? ([['clips', 'クリップ']] as const) : []),
   ] as const;
+  const icalKey = icalKeyOf(channel.id);
   const channelUrl = channel.customUrl
     ? `https://www.youtube.com/${channel.customUrl}`
     : `https://www.youtube.com/channel/${channel.id}`;
@@ -191,6 +194,8 @@ function ChannelProfile({
           )}
         </div>
 
+        {icalKey && <CalendarSubscribe feedKey={icalKey} label="このチャンネルの配信予定" />}
+
         <div role="tablist" aria-label="チャンネルの表示" className="flex gap-1 border-b border-line">
           {tabs.map(([value, label]) => (
             <button
@@ -220,6 +225,56 @@ function ChannelProfile({
           <p className="text-sm text-muted">チャンネルの説明はまだありません。</p>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 配信予定を、カレンダーアプリで購読するためのリンク(iCal のフィード、/api/ical/<キー>.ics)。
+ * URL はページからの相対で作る(サブパスで配信されるため。lib/api.ts を参照)。
+ * webcal: のリンクは、端末のカレンダーアプリ(iPhone のカレンダーなど)で購読を始める。Google カレンダーは専用のリンクで開く
+ */
+function CalendarSubscribe({ feedKey, label, className }: { feedKey: string; label: string; className?: string }) {
+  const httpsUrl = new URL(`api/ical/${feedKey}.ics`, document.baseURI).href;
+  const webcalUrl = httpsUrl.replace(/^https?:/, 'webcal:');
+  const googleUrl = `https://calendar.google.com/calendar/render?${new URLSearchParams({ cid: webcalUrl })}`;
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const copy = () => {
+    navigator.clipboard.writeText(httpsUrl).then(
+      () => setCopied(true),
+      () => setCopied(false),
+    );
+  };
+  const button =
+    'flex items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-xs font-medium whitespace-nowrap transition hover:bg-ink/5';
+
+  return (
+    <div className={clsx('flex flex-col gap-2 rounded-2xl border border-line p-3', className)}>
+      <p className="flex items-center gap-1.5 text-sm font-semibold">
+        <CalendarPlus className="size-4 shrink-0" aria-hidden />
+        {label}をカレンダーアプリで購読
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <a href={webcalUrl} className={button}>
+          カレンダーアプリに追加
+        </a>
+        <a href={googleUrl} target="_blank" rel="noreferrer" className={button}>
+          Google カレンダーに追加
+        </a>
+        <button type="button" onClick={copy} className={button}>
+          {copied ? <Check className="size-3.5" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
+          {copied ? 'コピーしました' : 'URL をコピー'}
+        </button>
+      </div>
+      <p className="text-xs leading-relaxed text-muted">
+        YouTube のライブとプレミア公開の予定が入ります(過去 30 日から 60 日先まで)。Google
+        カレンダーは、予定の変更が反映されるまで半日から 1 日ほどかかることがあります。
+      </p>
     </div>
   );
 }
