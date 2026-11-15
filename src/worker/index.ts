@@ -1,5 +1,6 @@
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { routePath } from 'hono/route';
+import { ICAL_ALL_KEY, ICAL_CHANNEL_KEYS } from '../shared/ical';
 import { splitSearchTerms } from '../shared/search';
 import { type ClipSort, VIDEO_TYPES, type VideoType } from '../shared/types';
 import {
@@ -9,6 +10,7 @@ import {
   type VideoListQuery,
   getPlaylistDetail,
   getSetlist,
+  listIcalEvents,
   listChannelClips,
   listChannelPlaylists,
   listEventClips,
@@ -20,6 +22,7 @@ import {
   searchEvents,
   toChannel,
 } from './db';
+import { buildIcal } from './ical';
 import { FULL_SYNC_INTERVAL_MS, syncAll, syncLiveStatus } from './sync';
 import { toIsoSeconds } from './time';
 
@@ -51,6 +54,16 @@ const EVENT_CLIPS_LIMIT = 50;
 const CLIPS_PAGE_SIZE = 30;
 /** クリップの一覧でさかのぼれる位置の上限(データベースが読む行数は offset に比例するので、際限なく大きくさせない) */
 const MAX_CLIPS_OFFSET = 3000;
+/** iCal のフィードをキャッシュに置く秒数(全体の同期の間隔と同じ 5 分) */
+const ICAL_CACHE_SECONDS = 300;
+/** iCal のフィードに入れる期間(今から何日前の開始から、何日後の開始まで) */
+const ICAL_PAST_DAYS = 30;
+const ICAL_FUTURE_DAYS = 60;
+/** iCal のフィードに入れる予定の数の上限(期間内に収まる見込みの数より十分大きくする) */
+const ICAL_MAX_EVENTS = 2000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** iCal のフィードのパス(この Worker から見たもの)。全体のレート制限から外すのに使う */
+const ICAL_PATH_PREFIX = '/api/ical/';
 
 const app = new Hono<{ Bindings: Bindings }>().basePath('/api');
 
@@ -98,7 +111,8 @@ const rateLimit = (pick: (env: Bindings) => RateLimit | undefined): MiddlewareHa
  * 使うのは検索・動画の一覧・朝活のコメント。検索はデータベースを全件読むので、同じ検索の繰り返しを安く防げる。検索結果が少し古くても、
  * 同期の結果が画面に出る速さには響きにくい。動画の一覧は、終わった配信と公開済みの動画だけを返すので、少し古くても困らない。
  * 朝活のコメントも置く(配信終了から 30 日後まで取り直すものなので、少し古くても困らない)。
- * 予定やセトリなどは、反映が遅れないよう、ここには置かない。
+ * 予定やセトリなどは、反映が遅れないよう、ここには置かない。ただし iCal のフィードは置く(カレンダーアプリが取り直す間隔は
+ * もともと 1 時間ほどより長く、5 分の遅れは目立たない。また、全体のレート制限から外しているので、キャッシュで取得をまとめる)。
  *
  * 応答の Cache-Control は、ルートではなくここで付ける(キャッシュに置く期間と、ブラウザが持つ期間を同じにする)。
  * キャッシュから返すときにも付け直す。独自ドメイン(mnkm.page)では、キャッシュから出てきた応答の Cache-Control が
@@ -133,7 +147,13 @@ const validId: MiddlewareHandler<{ Bindings: Bindings }> = async (c, next) => {
   await next();
 };
 
-app.use('*', rateLimit((env) => env.API_LIMITER));
+/*
+ * レート制限は、iCal のフィードを除くすべての API にかける。
+ * Google カレンダーは、購読しているフィードを Google のサーバーから取りに行くので、購読する人が増えると、
+ * 少ない数の IP からの取得にまとまる。フィードはルートの側で、キャッシュを先に見て、キャッシュに無いときだけ数える
+ */
+const apiRateLimit = rateLimit((env) => env.API_LIMITER);
+app.use('*', (c, next) => (c.req.path.startsWith(ICAL_PATH_PREFIX) ? next() : apiRateLimit(c, next)));
 
 app.get('/channels', async (c) => {
   const rows = await listEnabledChannels(c.env.DB);
@@ -314,6 +334,45 @@ app.get('/channels/:id/clips', validId, async (c) => {
   // 上限より先は続きを出さない(画面が、受け付けない offset を問い合わせないように)
   return c.json(page.nextOffset !== null && page.nextOffset > MAX_CLIPS_OFFSET ? { ...page, nextOffset: null } : page);
 });
+
+/**
+ * カレンダーアプリで購読する iCal のフィード。キーは shared/ical.ts の ICAL_CHANNEL_KEYS か all。
+ * キャッシュに置き、キャッシュに無いときだけレート制限で数える(キーが違うものは 404 で、データベースを読まない)
+ */
+app.get(
+  '/ical/:file{[a-z]+\\.ics}',
+  cached(ICAL_CACHE_SECONDS, (c) => c.req.param('file') ?? ''),
+  apiRateLimit,
+  async (c) => {
+    const key = c.req.param('file').replace(/\.ics$/, '');
+    const channelId = key === ICAL_ALL_KEY ? null : (ICAL_CHANNEL_KEYS[key] ?? undefined);
+    if (channelId === undefined) return c.json({ error: 'not found' }, 404);
+
+    let name = 'PROJECT NEBULA';
+    if (channelId !== null) {
+      const channel = (await listEnabledChannels(c.env.DB)).find((ch) => ch.id === channelId);
+      if (!channel) return c.json({ error: 'not found' }, 404);
+      // 公式のチャンネルは、短い名前(label)が「公式」なので、チャンネルの名前を使う
+      name = (key === 'official' ? channel.title : channel.label) || channel.title || channel.id;
+    }
+    const now = new Date();
+    const events = await listIcalEvents(
+      c.env.DB,
+      channelId,
+      toIsoSeconds(new Date(now.getTime() - ICAL_PAST_DAYS * DAY_MS)),
+      toIsoSeconds(new Date(now.getTime() + ICAL_FUTURE_DAYS * DAY_MS)),
+      ICAL_MAX_EVENTS,
+    );
+    const body = buildIcal({
+      name: `${name}の配信(非公式)`,
+      description: 'PROJECT NEBULA Stream Calendar(ファンメイドの非公式ツール)の配信予定。https://mnkm.page/prnb-stream-calendar/',
+      events,
+      now,
+    });
+    // Cache-Control は cached が付ける
+    return c.body(body, 200, { 'Content-Type': 'text/calendar; charset=utf-8' });
+  },
+);
 
 /** 手動同期(初回の取り込みや動作確認用)。Authorization: Bearer <ADMIN_TOKEN> */
 app.post('/admin/sync', async (c) => {
