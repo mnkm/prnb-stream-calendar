@@ -53,6 +53,7 @@ import {
   saveScanProgress,
   saveSetlistAuditStmts,
   saveSetlistSongsStmt,
+  type StoredSong,
   saveSetlistStmt,
   saveTwitchClipsBackfillStmt,
   saveTwitchTokenStmt,
@@ -1092,9 +1093,9 @@ async function parseSetlistSongs(db: D1Database, budget: RequestBudget) {
   await writeBatch(
     db,
     rows.map((row) => {
-      let songs: { title: string; artist: string | null }[] = [];
+      let songs: StoredSong[] = [];
       try {
-        songs = parseSetlist(row.text).map(({ title, artist }) => ({ title, artist }));
+        songs = parseSetlist(row.text).map(({ title, artist, time }) => ({ title, artist, time }));
       } catch (err) {
         // 読み取れないセトリが 1 本あっても、同じ行で毎回止まらないよう、曲なしで保存して先へ進む
         console.error(`parseSetlist failed for ${row.video_id}`, err);

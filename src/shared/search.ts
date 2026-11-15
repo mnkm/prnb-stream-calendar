@@ -4,6 +4,16 @@
  */
 export const normalizeForSearch = (s: string) => s.normalize('NFKC').toLowerCase();
 
+/**
+ * 歌唱履歴で、同じ曲をまとめるためのキー。曲名を検索用にそろえ(normalizeForSearch)、空白・記号・句読点を除く。
+ * 楽曲リスト(prnb-songlist)でも同じ規則で曲名をそろえて突き合わせる(規則は docs/details.md)。
+ * 除くと何も残らない曲名(記号だけの曲名)は、そろえただけのものをキーにする
+ */
+export const songKey = (title: string) => {
+  const normalized = normalizeForSearch(title).trim();
+  return normalized.replace(/[\s\p{P}\p{S}]/gu, '') || normalized;
+};
+
 /** 検索語を空白(全角も含む)で分け、検索用にそろえる */
 export const splitSearchTerms = (q: string) =>
   normalizeForSearch(q)

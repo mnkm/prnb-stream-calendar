@@ -1,6 +1,7 @@
-import { normalizeForSearch } from '../shared/search';
+import { normalizeForSearch, songKey } from '../shared/search';
 import { isRecommendedPlaylist } from '../shared/playlist';
 import { MORNING_MANUAL_VOICES } from './morning-manual';
+import { toIsoSeconds } from './time';
 import type {
   CalendarEvent,
   Clip,
@@ -10,6 +11,8 @@ import type {
   EventFilter,
   LiveStatus,
   MatchedSong,
+  SongHistory,
+  SongHistoryEntry,
   MembersFilter,
   MorningCommentPage,
   Platform,
@@ -647,22 +650,75 @@ export async function listIcalEvents(db: D1Database, channelId: string | null, f
   return results;
 }
 
+/**
+ * チャンネルの歌唱履歴。YouTube の終わった配信のうち、セトリから曲を読み取れたものを、曲ごとにまとめる。
+ * メンバー限定・限定公開・再生できないものは除く(歌った位置から再生できないため)。曲は、最後に歌った日の新しい順
+ */
+export async function getSongHistory(db: D1Database, channelId: string, now: Date): Promise<SongHistory> {
+  const { results } = await db
+    .prepare(
+      `SELECT v.id, v.title, v.event_at, s.songs
+         FROM setlists s JOIN videos v ON v.id = s.video_id
+        WHERE v.channel_id = ? AND v.platform = 'youtube' AND v.live_status = 'ended'
+          AND v.members_only = 0 AND v.unlisted = 0 AND v.unavailable_at IS NULL
+          AND s.songs IS NOT NULL
+        ORDER BY v.event_at DESC, v.id DESC`,
+    )
+    .bind(channelId)
+    .all<{ id: string; title: string; event_at: string; songs: string }>();
+
+  const byKey = new Map<string, SongHistoryEntry>();
+  for (const row of results) {
+    let songs: StoredSong[];
+    try {
+      songs = JSON.parse(row.songs) as StoredSong[];
+    } catch {
+      continue;
+    }
+    for (const song of songs) {
+      const key = songKey(song.title);
+      if (!key) continue;
+      const performance = { videoId: row.id, eventAt: row.event_at, time: song.time ?? null, title: row.title };
+      const entry = byKey.get(key);
+      // 配信は新しい順に読むので、最初に見つけた回が、いちばん新しい回
+      if (!entry) {
+        byKey.set(key, { title: song.title, artist: song.artist, key, count: 1, lastAt: row.event_at, performances: [performance] });
+      } else {
+        entry.count += 1;
+        entry.artist ??= song.artist;
+        entry.performances.push(performance);
+      }
+    }
+  }
+  return { songs: [...byKey.values()], updatedAt: toIsoSeconds(now) };
+}
+
+/** setlists.songs に保存する 1 曲。time(開始の秒)は読み取りの版 3 から。それより前に保存した行には無い */
+export interface StoredSong {
+  title: string;
+  artist: string | null;
+  time?: number;
+}
+
 /** 保存してある曲(setlists.songs の JSON)のうち、曲名かアーティストに検索語のどれかを含むもの */
 function matchSongs(songsJson: string, terms: string[]): MatchedSong[] {
-  let songs: MatchedSong[];
+  let songs: StoredSong[];
   try {
-    songs = JSON.parse(songsJson) as MatchedSong[];
+    songs = JSON.parse(songsJson) as StoredSong[];
   } catch {
     return [];
   }
-  return songs.filter((song) => {
-    const text = songSearchText(song);
-    return terms.some((t) => text.includes(t));
-  });
+  // 検索の結果には、曲名とアーティストだけを返す(開始の秒は返さない)
+  return songs
+    .filter((song) => {
+      const text = songSearchText(song);
+      return terms.some((t) => text.includes(t));
+    })
+    .map(({ title, artist }) => ({ title, artist }));
 }
 
 /** 1 曲分の検索用の文字列。曲名とアーティストをタブで区切る(検索語は空白を含まないので、またいで一致しない) */
-const songSearchText = (song: MatchedSong) => normalizeForSearch(`${song.title}\t${song.artist ?? ''}`);
+const songSearchText = (song: StoredSong) => normalizeForSearch(`${song.title}\t${song.artist ?? ''}`);
 
 /**
  * まだ曲を読み取っていない、または読み取りの規則が変わる前に読み取ったセトリ。
@@ -682,7 +738,7 @@ export async function findSetlistsToParse(db: D1Database, version: number, limit
 }
 
 /** 読み取った曲と、検索用にそろえた文字列を保存する */
-export function saveSetlistSongsStmt(db: D1Database, videoId: string, songs: MatchedSong[], version: number) {
+export function saveSetlistSongsStmt(db: D1Database, videoId: string, songs: StoredSong[], version: number) {
   return db
     .prepare('UPDATE setlists SET songs = ?, search_songs = ?, songs_version = ? WHERE video_id = ?')
     .bind(JSON.stringify(songs), songs.map(songSearchText).join('\n'), version, videoId);
