@@ -44,7 +44,9 @@ export function buildIcal({ name, description, events, now }: IcalCalendar): str
 function eventLines(event: IcalEventRow, now: Date): string[] {
   const url = `https://www.youtube.com/watch?v=${event.id}`;
   const start = new Date(event.event_at);
-  const title = `[${event.channel_name}] ${event.members_only === 1 ? '【メン限】' : ''}${event.title}`;
+  // タイトルにもともと「メン限」「メンバー限定」と書いてある配信には、印を重ねて付けない
+  const marked = event.members_only === 1 && !/メン限|メンバー限定/.test(event.title);
+  const title = `[${event.channel_name}] ${marked ? '【メン限】' : ''}${event.title}`;
   return [
     'BEGIN:VEVENT',
     // 同じ配信の予定が変わったとき(枠の時刻の変更など)、アプリが同じ予定として置き換えられるよう、動画の ID から作る
