@@ -10,6 +10,7 @@ import {
   type VideoListQuery,
   getPlaylistDetail,
   getSetlist,
+  getSongHistory,
   listIcalEvents,
   listChannelClips,
   listChannelPlaylists,
@@ -54,6 +55,10 @@ const EVENT_CLIPS_LIMIT = 50;
 const CLIPS_PAGE_SIZE = 30;
 /** クリップの一覧でさかのぼれる位置の上限(データベースが読む行数は offset に比例するので、際限なく大きくさせない) */
 const MAX_CLIPS_OFFSET = 3000;
+/** 歌唱履歴をキャッシュに置く秒数(終わった配信だけを集計するので、少し古くても困らない) */
+const SONG_HISTORY_CACHE_SECONDS = 3600;
+/** talent の値の形(channels.songlist_talent) */
+const TALENT_FORMAT = /^[a-z]{1,32}$/;
 /** iCal のフィードをキャッシュに置く秒数(全体の同期の間隔と同じ 5 分) */
 const ICAL_CACHE_SECONDS = 300;
 /** iCal のフィードに入れる期間(今から何日前の開始から、何日後の開始まで) */
@@ -111,6 +116,7 @@ const rateLimit = (pick: (env: Bindings) => RateLimit | undefined): MiddlewareHa
  * 使うのは検索・動画の一覧・朝活のコメント。検索はデータベースを全件読むので、同じ検索の繰り返しを安く防げる。検索結果が少し古くても、
  * 同期の結果が画面に出る速さには響きにくい。動画の一覧は、終わった配信と公開済みの動画だけを返すので、少し古くても困らない。
  * 朝活のコメントも置く(配信終了から 30 日後まで取り直すものなので、少し古くても困らない)。
+ * 歌唱履歴も置く(終わった配信だけを集計するので、少し古くても困らない)。
  * 予定やセトリなどは、反映が遅れないよう、ここには置かない。ただし iCal のフィードは置く(カレンダーアプリが取り直す間隔は
  * もともと 1 時間ほどより長く、5 分の遅れは目立たない。また、全体のレート制限から外しているので、キャッシュで取得をまとめる)。
  *
@@ -334,6 +340,23 @@ app.get('/channels/:id/clips', validId, async (c) => {
   // 上限より先は続きを出さない(画面が、受け付けない offset を問い合わせないように)
   return c.json(page.nextOffset !== null && page.nextOffset > MAX_CLIPS_OFFSET ? { ...page, nextOffset: null } : page);
 });
+
+/**
+ * チャンネルの歌唱履歴(曲ごとの、歌枠で歌った回数・最後に歌った日・歌った配信と位置)。楽曲リスト(prnb-songlist)が読む。
+ * talent は channels.songlist_talent の値。知らない値は 404
+ */
+app.get(
+  '/song-history',
+  cached(SONG_HISTORY_CACHE_SECONDS, (c) => c.req.query('talent') ?? ''),
+  async (c) => {
+    const talent = c.req.query('talent') ?? '';
+    if (!TALENT_FORMAT.test(talent)) return c.json({ error: 'not found' }, 404);
+    const channel = (await listEnabledChannels(c.env.DB)).find((ch) => ch.songlist_talent === talent);
+    if (!channel) return c.json({ error: 'not found' }, 404);
+    // Cache-Control は cached が付ける
+    return c.json(await getSongHistory(c.env.DB, channel.id, new Date()));
+  },
+);
 
 /**
  * カレンダーアプリで購読する iCal のフィード。キーは shared/ical.ts の ICAL_CHANNEL_KEYS か all。

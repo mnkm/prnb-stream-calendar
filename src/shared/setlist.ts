@@ -423,7 +423,8 @@ function keepNoTitles(lines: Line[]) {
  * 読み取りの規則の版。検索用に、読み取った曲を DB に保存している(setlists.songs)ので、
  * 読み取りの結果が変わるように規則を直したときは、この数を 1 つ増やす(同期のときに全部を読み取り直す)
  */
-export const SETLIST_PARSER_VERSION = 2;
+export const SETLIST_PARSER_VERSION = 3;
+// 3: 読み取りの規則は 2 と同じ。保存する曲に開始の秒(time)を足したので、保存し直すために上げた(歌唱履歴の集計で使う)
 
 /** 行が、文字より先に時刻で始まるか(「101.9:01:00 ～ 曲/A」「▶05:52〜」。「ありがとう! 0:59 ここ」は違う) */
 const STARTS_WITH_TIME = /^[^\p{L}]*\d{1,2}:\d{2}/u;
