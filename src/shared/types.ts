@@ -75,15 +75,18 @@ export interface MatchedSong {
   artist: string | null;
 }
 
-/** 歌唱履歴の 1 回分(歌った配信と、その中の位置) */
+/** 歌唱履歴の 1 回分(歌った配信と、その中の位置)。配信のタイトルと日時は SongHistory.streams にある */
 export interface SongPerformance {
   videoId: string;
-  /** 配信の開始日時(UTC ISO 8601) */
-  eventAt: string;
   /** 曲の開始の秒。読み取り直す前のセトリでは null */
   time: number | null;
-  /** 配信のタイトル */
+}
+
+/** 歌唱履歴に出てくる配信 */
+export interface SongHistoryStream {
   title: string;
+  /** 配信の開始日時(UTC ISO 8601) */
+  eventAt: string;
 }
 
 /** 歌唱履歴の 1 曲分。同じキー(songKey)の曲をまとめたもの */
@@ -103,6 +106,11 @@ export interface SongHistoryEntry {
 
 export interface SongHistory {
   songs: SongHistoryEntry[];
+  /**
+   * performances に出てくる配信。キーは動画の ID。
+   * 1 本の配信で何曲も歌うので、配信のタイトルと日時は回ごとに持たず、ここにまとめる(応答を小さくするため)
+   */
+  streams: Record<string, SongHistoryStream>;
   /** 集計した日時 */
   updatedAt: string;
 }

@@ -13,6 +13,7 @@ import type {
   MatchedSong,
   SongHistory,
   SongHistoryEntry,
+  SongHistoryStream,
   MembersFilter,
   MorningCommentPage,
   Platform,
@@ -668,6 +669,7 @@ export async function getSongHistory(db: D1Database, channelId: string, now: Dat
     .all<{ id: string; title: string; event_at: string; songs: string }>();
 
   const byKey = new Map<string, SongHistoryEntry>();
+  const streams: Record<string, SongHistoryStream> = {};
   for (const row of results) {
     let songs: StoredSong[];
     try {
@@ -678,7 +680,8 @@ export async function getSongHistory(db: D1Database, channelId: string, now: Dat
     for (const song of songs) {
       const key = songKey(song.title);
       if (!key) continue;
-      const performance = { videoId: row.id, eventAt: row.event_at, time: song.time ?? null, title: row.title };
+      const performance = { videoId: row.id, time: song.time ?? null };
+      streams[row.id] ??= { title: row.title, eventAt: row.event_at };
       const entry = byKey.get(key);
       // 配信は新しい順に読むので、最初に見つけた回が、いちばん新しい回
       if (!entry) {
@@ -690,7 +693,7 @@ export async function getSongHistory(db: D1Database, channelId: string, now: Dat
       }
     }
   }
-  return { songs: [...byKey.values()], updatedAt: toIsoSeconds(now) };
+  return { songs: [...byKey.values()], streams, updatedAt: toIsoSeconds(now) };
 }
 
 /** setlists.songs に保存する 1 曲。time(開始の秒)は読み取りの版 3 から。それより前に保存した行には無い */
