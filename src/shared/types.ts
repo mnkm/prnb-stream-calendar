@@ -80,6 +80,8 @@ export interface SongPerformance {
   videoId: string;
   /** 曲の開始の秒。読み取り直す前のセトリでは null */
   time: number | null;
+  /** この回のセトリのアーティスト(書き方は回によって違う)。書かれていなければ、読み取りの対応表で補ったもの。それも無ければ null */
+  artist: string | null;
 }
 
 /** 歌唱履歴に出てくる配信 */
